@@ -5,7 +5,7 @@
 - `src/tavily_skill/` — Python package (`cli.py` owns argparse + Tavily calls).
 - `tests/` — pytest suite (offline-first).
 - `docs/` — PRD, RFC, testing notes, working log.
-- `skills/` — Cursor-agent SKILL entrypoint (English).
+- `skills/` — AI-agent skill entrypoint (`skill_tavily.md`, English).
 - `scripts/run_cli.sh` — convenience runner once `.venv` exists.
 
 Treat **repository root** as the default cwd in docs and examples; avoid machine-specific absolute paths.
