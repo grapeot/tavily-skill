@@ -31,7 +31,6 @@ EXTRACT_FORMAT_CHOICES = ["markdown", "text"]
 
 # Optional 1Password reference, e.g. op://Vault/Item/field — never commit real vault paths.
 _ONEPASSWORD_REF_ENV = "ONEPASSWORD_TAVILY_REFERENCE"
-_LEGACY_ONEPASSWORD_REF_ENV = "OP_READ_TAVILY_KEY"
 _OUTPUT_DIR_ENV = "TAVILY_CLI_OUTPUT_DIR"
 
 
@@ -74,7 +73,7 @@ def load_workspace_env(explicit_env_file: str | None = None) -> Path | None:
 
 
 def _onepassword_reference() -> str | None:
-    return os.environ.get(_ONEPASSWORD_REF_ENV) or os.environ.get(_LEGACY_ONEPASSWORD_REF_ENV)
+    return os.environ.get(_ONEPASSWORD_REF_ENV)
 
 
 def _get_api_key_from_1password() -> str | None:
@@ -107,8 +106,8 @@ def _get_api_key() -> str:
 
     raise RuntimeError(
         "Tavily API key not found. Set TAVILY_API_KEY, or set "
-        f"{_ONEPASSWORD_REF_ENV} (or {_LEGACY_ONEPASSWORD_REF_ENV}) to an "
-        "`op read`-compatible secret reference and ensure the 1Password CLI is logged in."
+        f"{_ONEPASSWORD_REF_ENV} to an `op read`-compatible secret reference "
+        "and ensure the 1Password CLI is logged in."
     )
 
 

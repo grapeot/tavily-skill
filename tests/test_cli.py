@@ -375,7 +375,7 @@ def _secret_available_via_env() -> bool:
 
 
 def _secret_available_via_op_reference() -> bool:
-    ref = os.environ.get("ONEPASSWORD_TAVILY_REFERENCE") or os.environ.get("OP_READ_TAVILY_KEY")
+    ref = os.environ.get("ONEPASSWORD_TAVILY_REFERENCE")
     if not ref:
         return False
     result = subprocess.run(
@@ -558,9 +558,9 @@ def test_cli_resolves_api_key_through_onepassword_reference(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _require_integration()
-    ref = os.environ.get("ONEPASSWORD_TAVILY_REFERENCE") or os.environ.get("OP_READ_TAVILY_KEY")
+    ref = os.environ.get("ONEPASSWORD_TAVILY_REFERENCE")
     if not ref:
-        pytest.skip("need ONEPASSWORD_TAVILY_REFERENCE or OP_READ_TAVILY_KEY for this assertion")
+        pytest.skip("need ONEPASSWORD_TAVILY_REFERENCE for this assertion")
 
     secret_result = subprocess.run(
         ["op", "read", ref],
