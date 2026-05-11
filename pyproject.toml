@@ -1,0 +1,32 @@
+[project]
+name = "tavily-skill"
+version = "0.1.0"
+description = "Agent-oriented Tavily search and extract CLI with stable JSON output"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "tavily-python>=0.7.24,<1",
+    "python-dotenv>=1.0,<2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0,<9",
+    "ruff>=0.4,<1",
+]
+
+[project.scripts]
+tavily-skill = "tavily_skill.cli:main"
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: paid Tavily API + optional 1Password CLI",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
