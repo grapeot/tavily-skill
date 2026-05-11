@@ -30,7 +30,6 @@ Alias: `OP_READ_TAVILY_KEY`. Never commit vault references that expose private i
 - [`docs/prd.md`](docs/prd.md) — product intent and success criteria
 - [`docs/rfc.md`](docs/rfc.md) — architecture decisions and migration notes
 - [`docs/test.md`](docs/test.md) — how to run unit vs integration tests
-- [`docs/public_release_review.md`](docs/public_release_review.md) — OSS hygiene checklist
 
 ## Cursor / Agent skill
 

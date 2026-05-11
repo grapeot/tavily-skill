@@ -4,7 +4,7 @@
 
 - `src/tavily_skill/` — Python package (`cli.py` owns argparse + Tavily calls).
 - `tests/` — pytest suite (offline-first).
-- `docs/` — PRD, RFC, testing notes, release checklist.
+- `docs/` — PRD, RFC, testing notes, working log.
 - `skills/` — Cursor-agent SKILL entrypoint (English).
 - `scripts/run_cli.sh` — convenience runner once `.venv` exists.
 
