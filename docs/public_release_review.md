@@ -1,15 +1,15 @@
 # Public Release Review
 
-This note summarizes what was audited before treating `adhoc_jobs/tavily_skill_public` as publishable outside `knowledge_working`.
+This checklist summarizes what to scrub before treating **this repository snapshot** as safe for wide redistribution.
 
-## Removed or generalized vs workspace-original CLI
+## Removed or generalized vs sensitive-internal forks
 
 | Original artifact | Risk | Mitigation in this repo |
 |-------------------|------|-------------------------|
-| Hard-coded `op://dev/dev-api-keys/tavily_api_key` | Vault/item leakage | Secret lookup gated behind operator-provided `ONEPASSWORD_TAVILY_REFERENCE` / `OP_READ_TAVILY_KEY` env vars |
+| Hard-coded `op://…` vault references | Vault/item leakage | Secret lookup gated behind operator-provided `ONEPASSWORD_TAVILY_REFERENCE` / `OP_READ_TAVILY_KEY` env vars |
 | Error strings documenting internal vault layout | Same | Generic messaging referencing env-driven references |
-| Workspace-root `.env` path inferred from script parents | Wrong cwd semantics elsewhere | `.env` discovery walks cwd ancestors only |
-| Absolute `/Users/.../.venv` instructions | Personal paths | README documents uv-created `.venv` generically |
+| `.env` path inferred from a fixed script location | Wrong cwd semantics elsewhere | `.env` discovery walks cwd ancestors only |
+| Docs pointing at machine-specific interpreter paths | Not reproducible | Document `./.venv` and `uv` without tying to a single hostname |
 
 ## Credential posture for OSS clones
 

@@ -2,10 +2,17 @@
 
 Small CLI around the [Tavily Python SDK](https://pypi.org/project/tavily-python/) for agent workflows: **`search`** and **`extract`**, stable JSON envelopes, predictable defaults.
 
+## Naming: `_public` folder vs GitHub repo name
+
+If you embed this project inside a larger monorepo, the checkout folder might end with **`_public`** on purpose: it signals *this subtree is the publishable slice* (no internal-only notes, credentials, or design drafts). The **GitHub repository itself does not need** `_public` or `public` in its name—use a neutral repo slug such as **`tavily-skill`**.
+
+Maintain whatever **private** fork or sibling directory you need alongside it for proprietary workflows; keep divergence deliberate rather than accidental.
+
+All paths below assume **`/` is this repository root** after `git clone` (relative paths only—no machine-local prefixes).
+
 ## Quick start
 
 ```bash
-cd adhoc_jobs/tavily_skill_public   # or your clone root
 uv venv .venv
 uv pip install -e '.[dev]'
 export TAVILY_API_KEY=tvly-...

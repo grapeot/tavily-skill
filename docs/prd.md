@@ -34,4 +34,4 @@ Optional: **`ONEPASSWORD_TAVILY_REFERENCE`** (alias **`OP_READ_TAVILY_KEY`**) po
 
 ## Release Constraints
 
-Repository contents must remain suitable for **public Git hosting**: no personal vault paths, no workspace-local absolute directories in runtime defaults beyond cwd-relative `./tmp/tavily`.
+Repository contents must remain suitable for **public Git hosting**: no personal vault paths, no machine-local absolute paths in documentation or runtime defaults beyond cwd-relative `./tmp/tavily`.

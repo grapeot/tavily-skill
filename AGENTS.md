@@ -8,17 +8,19 @@
 - `skills/` — Cursor-agent SKILL entrypoint (English).
 - `scripts/run_cli.sh` — convenience runner once `.venv` exists.
 
+Paths in docs commands assume **repository root** as cwd unless noted otherwise—avoid absolute filesystem prefixes.
+
 ## Expectations
 
 1. After substantive edits, append a dated bullet under `docs/working.md` → **Changelog** and capture pitfalls under **Lessons Learned**.
-2. Prefer small commits; this repository keeps its own git history independent from `knowledge_working`.
+2. Prefer small commits. When nested inside another repo, this tree keeps **its own** `.git`; publishing pushes **only** this subtree's remote.
 3. Language for documentation inside this repo stays **English**.
 4. Never commit vault-specific `op://` defaults or raw API keys — operators configure env vars locally.
 
 ## Environment
 
-Python **3.10+**. Use `uv pip install -e '.[dev]'` inside `.venv`. Integration tests spend Tavily credits; gate them with `RUN_TAVILY_INTEGRATION=1`.
+Python **3.10+**. Use `uv pip install -e '.[dev]'` inside `./.venv`. Integration tests spend Tavily credits; gate them with `RUN_TAVILY_INTEGRATION=1`.
 
-## Compatibility shim
+## Packaging boundary
 
-The parent workspace keeps `tools/tavily_cli.py` pointing at this tree (`adhoc_jobs/tavily_skill_public/` inside the monorepo). Update both sides when CLI contracts change.
+Product identity stays **Tavily Skill** (Python package `tavily_skill`, optional CLI console script `tavily-skill`). A `_public`-suffixed **directory name** in a host monorepo marks the publishable export only—it must **not** force the GitHub repository slug to include `public`.

@@ -16,7 +16,7 @@ disable-model-invocation: true
 
 ## Prerequisites
 
-From project root `adhoc_jobs/tavily_skill_public`:
+From **this repository root** (relative paths only):
 
 ```bash
 uv pip install -e '.[dev]'
