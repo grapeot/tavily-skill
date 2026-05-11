@@ -33,7 +33,7 @@ Default outputs anchor under `Path.cwd() / "tmp" / "tavily"` so clones behave co
 
 ## Migration / Compatibility
 
-Inside `knowledge_working`, `tools/tavily_cli.py` remains a thin shim that prepends `adhoc_jobs/tavily_skill/src` to `PYTHONPATH` and delegates to `tavily_skill.cli.main`. Legacy cron snippets invoking `python tools/tavily_cli.py …` continue to operate without edits while canonical sources live under `adhoc_jobs/tavily_skill`.
+Inside `knowledge_working`, `tools/tavily_cli.py` remains a thin shim that prepends `adhoc_jobs/tavily_skill_public/src` to `PYTHONPATH` and delegates to `tavily_skill.cli.main`. Legacy cron snippets invoking `python tools/tavily_cli.py …` continue to operate without edits while canonical sources live under `adhoc_jobs/tavily_skill_public`.
 
 Existing automation that depended on implicit `op read` targets baked into older forks **must** set either:
 

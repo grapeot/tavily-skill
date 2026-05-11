@@ -21,4 +21,4 @@ Python **3.10+**. Use `uv pip install -e '.[dev]'` inside `.venv`. Integration t
 
 ## Compatibility shim
 
-The parent workspace keeps `tools/tavily_cli.py` pointing here so legacy invocations continue to work. Update both sides when CLI contracts change.
+The parent workspace keeps `tools/tavily_cli.py` pointing at this tree (`adhoc_jobs/tavily_skill_public/` inside the monorepo). Update both sides when CLI contracts change.

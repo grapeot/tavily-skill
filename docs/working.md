@@ -3,6 +3,7 @@
 ## 2026-05-10
 
 - Initial scaffold: extracted Tavily CLI from workspace `tools/tavily_cli.py`, public-safe secret handling, English docs and SKILL.
+- Renamed monorepo checkout directory to `tavily_skill_public`; Python package remains `tavily_skill`, product name remains Tavily Skill.
 
 ## Lessons Learned
 

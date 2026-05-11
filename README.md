@@ -5,7 +5,7 @@ Small CLI around the [Tavily Python SDK](https://pypi.org/project/tavily-python/
 ## Quick start
 
 ```bash
-cd adhoc_jobs/tavily_skill   # or your clone root
+cd adhoc_jobs/tavily_skill_public   # or your clone root
 uv venv .venv
 uv pip install -e '.[dev]'
 export TAVILY_API_KEY=tvly-...

@@ -1,6 +1,6 @@
 # Public Release Review
 
-This note summarizes what was audited before treating `adhoc_jobs/tavily_skill` as publishable outside `knowledge_working`.
+This note summarizes what was audited before treating `adhoc_jobs/tavily_skill_public` as publishable outside `knowledge_working`.
 
 ## Removed or generalized vs workspace-original CLI
 
