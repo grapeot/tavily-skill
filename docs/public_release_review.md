@@ -2,7 +2,7 @@
 
 This checklist summarizes what to scrub before treating **this repository snapshot** as safe for wide redistribution.
 
-## Removed or generalized vs sensitive-internal forks
+## Removed or generalized vs earlier insecure defaults
 
 | Original artifact | Risk | Mitigation in this repo |
 |-------------------|------|-------------------------|

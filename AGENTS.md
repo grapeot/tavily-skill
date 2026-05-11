@@ -4,16 +4,16 @@
 
 - `src/tavily_skill/` — Python package (`cli.py` owns argparse + Tavily calls).
 - `tests/` — pytest suite (offline-first).
-- `docs/` — PRD, RFC, testing notes, public-release checklist.
+- `docs/` — PRD, RFC, testing notes, release checklist.
 - `skills/` — Cursor-agent SKILL entrypoint (English).
 - `scripts/run_cli.sh` — convenience runner once `.venv` exists.
 
-Paths in docs commands assume **repository root** as cwd unless noted otherwise—avoid absolute filesystem prefixes.
+Treat **repository root** as the default cwd in docs and examples; avoid machine-specific absolute paths.
 
 ## Expectations
 
 1. After substantive edits, append a dated bullet under `docs/working.md` → **Changelog** and capture pitfalls under **Lessons Learned**.
-2. Prefer small commits. When nested inside another repo, this tree keeps **its own** `.git`; publishing pushes **only** this subtree's remote.
+2. Prefer small, focused commits.
 3. Language for documentation inside this repo stays **English**.
 4. Never commit vault-specific `op://` defaults or raw API keys — operators configure env vars locally.
 
@@ -21,6 +21,7 @@ Paths in docs commands assume **repository root** as cwd unless noted otherwise�
 
 Python **3.10+**. Use `uv pip install -e '.[dev]'` inside `./.venv`. Integration tests spend Tavily credits; gate them with `RUN_TAVILY_INTEGRATION=1`.
 
-## Packaging boundary
+## Packaging
 
-Product identity stays **Tavily Skill** (Python package `tavily_skill`, optional CLI console script `tavily-skill`). A `_public`-suffixed **directory name** in a host monorepo marks the publishable export only—it must **not** force the GitHub repository slug to include `public`.
+- Python package: **`tavily_skill`**
+- Optional console entry point from `pyproject.toml`: **`tavily-skill`**

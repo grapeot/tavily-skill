@@ -16,7 +16,7 @@ disable-model-invocation: true
 
 ## Prerequisites
 
-From **this repository root** (relative paths only):
+From the repository root:
 
 ```bash
 uv pip install -e '.[dev]'
