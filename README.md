@@ -88,7 +88,7 @@ In default mode, stdout returns a status object like:
   "status": "ok",
   "output_mode": "file",
   "output_path": "tmp/tavily/search_20260510_143022_latest_ai_news.json",
-  "summary": {"result_count": 6, "image_count": 0, "has_answer": false},
+  "summary": {"result_count": 6, "image_count": 0},
   "payload_schema": { ... }
 }
 ```
@@ -101,7 +101,6 @@ Key defaults the agent should be aware of — they are optimized for agent workf
 
 - `search_depth=advanced` — deeper, higher-quality results
 - `max_results=6` — enough signal across diverse sources without overloading context
-- `answer=off` — the agent synthesizes from raw content; Tavily's LLM-generated answer is a lossy summary
 - `include_images=False` — most research workflows don't consume images; enable explicitly when needed
 - `raw_content=markdown` — structured content that agents can actually parse
 

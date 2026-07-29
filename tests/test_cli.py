@@ -25,7 +25,6 @@ class StubClient:
         self.search_calls.append(kwargs)
         return {
             "query": kwargs["query"],
-            "answer": "stub answer",
             "results": [{"url": "https://example.com", "title": "Example", "content": "demo"}],
             "images": [{"url": "https://example.com/image.png", "description": "demo"}],
             "response_time": 1.2,
@@ -59,9 +58,15 @@ def test_search_parser_defaults() -> None:
     assert args.search_depth == "advanced"
     assert args.include_images is False
     assert args.include_image_descriptions is False
-    assert args.answer == "off"
     assert args.raw_content == "markdown"
     assert args.stdout is False
+
+
+def test_search_parser_rejects_answer_option() -> None:
+    parser = _build_parser()
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(["search", "latest ai", "--answer", "basic"])
 
 
 def test_extract_parser_defaults() -> None:
@@ -226,7 +231,6 @@ def test_normalize_search_response() -> None:
     args = parser.parse_args(["search", "latest ai"])
     response = {
         "query": "latest ai",
-        "answer": "answer",
         "results": [{"url": "https://example.com"}],
         "images": [{"url": "https://example.com/image.png"}],
         "response_time": 0.8,
@@ -239,7 +243,16 @@ def test_normalize_search_response() -> None:
     assert payload["command"] == "search"
     assert payload["data"]["result_count"] == 1
     assert payload["data"]["image_count"] == 1
-    assert payload["data"]["answer"] == "answer"
+
+
+def test_normalize_search_response_drops_answer() -> None:
+    parser = _build_parser()
+    args = parser.parse_args(["search", "latest ai"])
+
+    payload = tavily_cli._normalize_search_response(args, {"answer": "must not leak"})
+
+    assert "answer" not in payload["input"]
+    assert "answer" not in payload["data"]
 
 
 def test_normalize_extract_response() -> None:
@@ -263,7 +276,7 @@ def test_emit_payload_stdout_only(capsys: pytest.CaptureFixture[str]) -> None:
     payload = {
         "command": "search",
         "input": {"query": "latest ai"},
-        "data": {"result_count": 1, "image_count": 0, "answer": None},
+        "data": {"result_count": 1, "image_count": 0},
     }
 
     tavily_cli._emit_payload(payload, None)
@@ -278,7 +291,7 @@ def test_emit_payload_file_mode(tmp_path: Path, capsys: pytest.CaptureFixture[st
     payload = {
         "command": "search",
         "input": {"query": "latest ai"},
-        "data": {"result_count": 2, "image_count": 1, "answer": "yes"},
+        "data": {"result_count": 2, "image_count": 1},
     }
 
     tavily_cli._emit_payload(payload, str(output_path))
@@ -288,6 +301,8 @@ def test_emit_payload_file_mode(tmp_path: Path, capsys: pytest.CaptureFixture[st
     assert status_payload["output_mode"] == "file"
     assert status_payload["output_path"] == str(output_path)
     assert status_payload["summary"]["result_count"] == 2
+    assert "has_answer" not in status_payload["summary"]
+    assert "answer" not in status_payload["payload_schema"]["data"]
     assert output_path.exists()
     assert "Saved JSON to" in captured.err
 
@@ -434,7 +449,6 @@ class TavilyClient:
     def search(self, **kwargs):
         return {
             'query': kwargs['query'],
-            'answer': 'fake',
             'results': [{'url': 'https://example.com', 'title': 'fake', 'content': 'fake'}],
             'images': [],
             'response_time': 0.1,

@@ -16,7 +16,6 @@ from dotenv import load_dotenv
 DEFAULT_MAX_RESULTS = 6
 DEFAULT_SEARCH_DEPTH = "advanced"
 DEFAULT_TOPIC = "general"
-DEFAULT_ANSWER_MODE = "off"
 DEFAULT_RAW_CONTENT = "markdown"
 DEFAULT_TIMEOUT = 60
 DEFAULT_EXTRACT_DEPTH = "advanced"
@@ -24,7 +23,6 @@ DEFAULT_EXTRACT_FORMAT = "markdown"
 SEARCH_DEPTH_CHOICES = ["basic", "advanced", "fast", "ultra-fast"]
 TOPIC_CHOICES = ["general", "news", "finance"]
 TIME_RANGE_CHOICES = ["day", "week", "month", "year"]
-ANSWER_CHOICES = ["off", "basic", "advanced"]
 RAW_CONTENT_CHOICES = ["off", "markdown", "text"]
 EXTRACT_DEPTH_CHOICES = ["basic", "advanced"]
 EXTRACT_FORMAT_CHOICES = ["markdown", "text"]
@@ -165,12 +163,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Exclude a domain; repeat for multiple domains",
     )
     search_parser.add_argument(
-        "--answer",
-        choices=ANSWER_CHOICES,
-        default=DEFAULT_ANSWER_MODE,
-        help=f"Answer mode (default: {DEFAULT_ANSWER_MODE})",
-    )
-    search_parser.add_argument(
         "--stdout",
         action="store_true",
         help="Print the full JSON payload to stdout instead of writing it to the default output file",
@@ -309,16 +301,12 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
 
 
 def _build_search_request(args: argparse.Namespace) -> dict[str, Any]:
-    include_answer: str | bool = False
-    if args.answer != "off":
-        include_answer = args.answer
-
     request: dict[str, Any] = {
         "query": args.query,
         "search_depth": args.search_depth,
         "topic": args.topic,
         "max_results": args.max_results,
-        "include_answer": include_answer,
+        "include_answer": False,
         "include_images": args.include_images,
         "include_image_descriptions": args.include_image_descriptions,
         "include_usage": True,
@@ -359,7 +347,6 @@ def _normalize_search_response(args: argparse.Namespace, response: dict[str, Any
             "end_date": args.end_date,
             "include_domains": args.include_domains,
             "exclude_domains": args.exclude_domains,
-            "answer": args.answer,
             "include_images": args.include_images,
             "include_image_descriptions": args.include_image_descriptions,
             "raw_content": args.raw_content,
@@ -368,7 +355,6 @@ def _normalize_search_response(args: argparse.Namespace, response: dict[str, Any
         },
         "data": {
             "query": response.get("query", args.query),
-            "answer": response.get("answer"),
             "results": results,
             "images": images,
             "response_time": response.get("response_time"),
@@ -452,7 +438,6 @@ def _emit_payload(payload: dict[str, Any], output_path: str | None) -> None:
             "result_count": payload.get("data", {}).get("result_count"),
             "failed_count": payload.get("data", {}).get("failed_count"),
             "image_count": payload.get("data", {}).get("image_count"),
-            "has_answer": bool(payload.get("data", {}).get("answer")),
         },
         "payload_schema": _payload_schema(command),
     }
@@ -506,7 +491,6 @@ def _payload_schema(command: object) -> dict[str, Any]:
         **base,
         "data": {
             "query": "string",
-            "answer": "string|null",
             "results": "array",
             "images": "array",
             "response_time": "number|null",

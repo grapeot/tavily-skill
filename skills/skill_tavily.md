@@ -2,7 +2,7 @@
 name: tavily-skill
 description: >-
   Runs Tavily-backed web search and URL extraction via python -m tavily_skill with stable JSON envelopes.
-  Use when agents need terminal Tavily access, reproducible defaults (advanced depth, answers off), or file-oriented payloads outside MCP.
+  Use when agents need terminal Tavily access, reproducible defaults, or file-oriented payloads outside MCP.
 disable-model-invocation: true
 ---
 
@@ -88,7 +88,6 @@ python -m tavily_skill search "latest Apple event stage photos" --images --image
 - `search_depth="advanced"`
 - `max_results=6`
 - `topic="general"`
-- `answer="off"`
 - `raw_content="markdown"`
 - `include_images` disabled by default
 - `include_image_descriptions` disabled by default
@@ -112,7 +111,6 @@ python -m tavily_skill search "latest Apple event stage photos" --images --image
 | `--end-date` | End date, `YYYY-MM-DD` | — |
 | `--include-domain` | Restrict to a domain; repeat for multiple | — |
 | `--exclude-domain` | Exclude a domain; repeat for multiple | — |
-| `--answer` | `off` / `basic` / `advanced` | `off` |
 | `--stdout` | Print full payload directly to stdout | `False` |
 | `--raw-content` | `off` / `markdown` / `text` | `markdown` |
 | `--country` | Boost results by country | — |
@@ -175,7 +173,6 @@ The top-level structure is fixed:
   "input": {},
   "data": {
     "query": "...",
-    "answer": null,
     "results": [],
     "images": [],
     "response_time": 0.0,
@@ -187,7 +184,7 @@ The top-level structure is fixed:
 }
 ```
 
-In default mode, `search`'s `data.results` retains the result items returned by Tavily, which should include `raw_content`. `data.answer` is `null` by default — it only contains a value when `--answer basic` or `--answer advanced` is explicitly passed, which requests Tavily's LLM-aggregated answer. When image descriptions are enabled, `data.images` is an array of objects containing `url` and `description`. For `extract`, `data.results` holds the URL extraction results and additionally carries `failed_results` and `failed_count`.
+In default mode, `search`'s `data.results` retains the result items returned by Tavily, which should include `raw_content`. When image descriptions are enabled, `data.images` is an array of objects containing `url` and `description`. For `extract`, `data.results` holds the URL extraction results and additionally carries `failed_results` and `failed_count`.
 
 In default mode, stdout does not return this full payload. It returns a lightweight object containing the output path, summary information, and payload schema. The full payload only prints to stdout when `--stdout` is passed.
 
@@ -218,9 +215,8 @@ Integration tests hit the real Tavily API. If `TAVILY_API_KEY` is not set, confi
 
 - When running the Tavily CLI inside this workspace, prefer `./.venv/bin/python -m tavily_skill ...`. Do not assume a system `python` is available on PATH.
 - If you want to consume results directly in the current turn rather than writing to disk first, pass `--stdout`. Otherwise stdout only returns a lightweight status object, and the full payload lands under `tmp/tavily/`.
-- Do not rely on Tavily's LLM-aggregated answer for factual judgments. It can serve as a low-confidence hint, but never as a conclusion source. Default to `--answer off`.
 - For routine research, default to `--raw-content markdown`. Base judgments on `data.results[*].raw_content`, source URLs, page titles, snippet content, and — when needed — content pulled via `extract`.
-- Only pass `--raw-content off` when payload size is a confirmed bottleneck. Doing so means you must open the original links or continue with `extract` — don't rely solely on snippets and `data.answer`.
+- Only pass `--raw-content off` when payload size is a confirmed bottleneck. Doing so means you must open the original links or continue with `extract` rather than relying solely on snippets.
 
 ## More detail
 

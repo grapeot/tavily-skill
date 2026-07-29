@@ -140,7 +140,6 @@ Every default is set to minimize surprise in agent workflows:
 
 - `search_depth=advanced` — basic depth returns fewer results with less context, which agents handle worse
 - `max_results=6` — enough to get signal across multiple sources, not so many that downstream processing becomes expensive
-- `answer=off` — Tavily's LLM-generated answer is a low-confidence summary; agents should synthesize from raw results, not delegate reasoning
 - `raw_content=markdown` — the structured content is what agents actually read; turning it off is an optimization, not the default
 - `include_images=False` — most research workflows don't consume images; including them silently inflates payload size
 - `topic=general` — the least presumptuous default; `news` and `finance` are domain-specific optimizations that callers opt into
@@ -149,7 +148,7 @@ Every default is set to minimize surprise in agent workflows:
 
 The test suite is split into two tiers with a hard gate between them.
 
-Unit tests (19 tests, always run) exercise argument parsing, request construction, response normalization, and output dispatch. They use a `StubClient` that records calls and returns fake responses. No network, no API key.
+Unit tests (always run) exercise argument parsing, request construction, response normalization, and output dispatch. They use a `StubClient` that records calls and returns fake responses. No network, no API key.
 
 Integration tests (5 tests, gated behind `RUN_TAVILY_INTEGRATION=1`) run real subprocess invocations against the live Tavily API. They verify end-to-end behavior: credential resolution through both env var and 1Password paths, output file creation, status JSON structure, and the guarantee that raw content never appears on stdout in default mode.
 

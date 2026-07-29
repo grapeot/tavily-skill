@@ -47,7 +47,7 @@ Each section records a design decision embodied in the codebase, with the contex
 
 **Decision.** `search` and `extract` are distinct argparse subparsers, not a single parser with a `--mode` flag.
 
-**Context.** The two commands accept different arguments. `search` takes a natural-language query string as its positional argument, plus domain filters, time ranges, and answer mode. `extract` takes one or more URLs as positional arguments, plus extraction depth and chunking parameters. Merging both behind a unified parser forces every argument to be optional (because some don't apply to both modes), which weakens validation.
+**Context.** The two commands accept different arguments. `search` takes a natural-language query string as its positional argument, plus domain filters and time ranges. `extract` takes one or more URLs as positional arguments, plus extraction depth and chunking parameters. Merging both behind a unified parser forces every argument to be optional (because some don't apply to both modes), which weakens validation.
 
 **What was rejected.** A single entry point like `python -m tavily_skill --mode search "query"` or `python -m tavily_skill --mode extract url1 url2`. This would require manual cross-validation of conflicting flags and produce less readable help output.
 
@@ -81,10 +81,10 @@ Each section records a design decision embodied in the codebase, with the contex
 
 **Consequences.** The file is long but linear. A reader can follow the entire call path — `main()` → `_validate_args()` → `_get_api_key()` → `_build_client()` → `run_search()` → `_normalize_search_response()` → `_emit_payload()` — without switching files. If the CLI grows to support `crawl` or `map`, the file should be split before adding a second command group. The threshold for splitting is roughly when any function needs to be imported from a test that isn't testing the CLI entry point.
 
-## 9. `answer=off` as the default
+## 9. Exclude Tavily's generated answer
 
-**Decision.** Tavily's LLM-generated answer is disabled by default (`answer="off"`). The caller must pass `--answer basic` or `--answer advanced` to receive it.
+**Decision.** The CLI always sends `include_answer=False`, provides no flag to enable Tavily's LLM-generated answer, and omits any answer returned by the upstream API from normalized output.
 
 **Context.** Tavily's aggregated answer is a convenience feature for human-facing applications. For agent workflows, it is the wrong default: the answer is a lossy summary produced by a model the agent doesn't control, and treating it as a primary information source introduces a second layer of hallucination risk on top of the source content. Agents perform better when they read the raw results and synthesize their own conclusions.
 
-**Consequences.** The `data.answer` field is `null` by default. Agents that want a summary can request it, but the default steers them toward the raw content. The `include_answer` parameter in the SDK call is set to `False` (not omitted) when answer is `"off"`, to make the intent explicit in the request.
+**Consequences.** Search requests do not spend credits on answer generation, and agents cannot consume the generated answer through the CLI's payload or schema. The `include_answer` parameter remains explicit in every SDK request so this behavior cannot depend on upstream defaults.
