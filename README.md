@@ -29,6 +29,8 @@ export TAVILY_API_KEY=tvly-...
 
 If you use 1Password CLI, you can set `ONEPASSWORD_TAVILY_REFERENCE` to an `op read`-compatible secret reference instead of exporting the key directly. The CLI resolves it at runtime.
 
+Set `TAVILY_CLI_OUTPUT_DIR` to one dedicated, persistent directory (for example a knowledge-base `web_snapshots/raw` folder). Without it, the CLI writes auto-named payloads under `./tmp/tavily/` relative to the current working directory — ephemeral and scattered across session directories. A single stable directory lets every search/extract payload accumulate as a timestamped corpus of primary sources, which pays off over time for research, auditing, and later retrieval.
+
 Verify it works:
 
 ```bash

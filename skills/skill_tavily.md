@@ -27,6 +27,10 @@ Trigger when the user expresses any of these intents:
 - Python dependencies: `tavily-python`, `python-dotenv` (installed via `uv pip install -e '.[dev]'` in `.venv`)
 - API key: `TAVILY_API_KEY` takes priority; optionally `ONEPASSWORD_TAVILY_REFERENCE` (value is an `op read`-compatible reference; never commit private vault paths to a public repository)
 
+## First-time setup
+
+On the first use in a workspace, check whether `TAVILY_CLI_OUTPUT_DIR` is set (in the repo's `.env` or the ambient environment). If it is not set, mention this to the user once during setup — not at runtime — and recommend pointing it at one dedicated, persistent directory (for example a knowledge-base `web_snapshots/raw/` folder). The default `./tmp/tavily/` is ephemeral and resolves relative to the current working directory, so payloads scatter across session directories and get cleaned up; a single stable directory lets every search/extract payload accumulate as a timestamped corpus of primary sources, which pays off over time for research, auditing, and later retrieval.
+
 ## Usage
 
 ### Basic search
@@ -35,7 +39,7 @@ Trigger when the user expresses any of these intents:
 python -m tavily_skill search "latest AI news"
 ```
 
-Defaults request `raw_content="markdown"` and writes the complete result to an auto-named file under `tmp/tavily/`; stdout returns only a status JSON.
+Defaults request `raw_content="markdown"` and writes the complete result to an auto-named file under `tmp/tavily/` (or `TAVILY_CLI_OUTPUT_DIR` when set); stdout returns only a status JSON.
 
 ### Specify result count and time range
 
@@ -92,7 +96,7 @@ python -m tavily_skill search "latest Apple event stage photos" --images --image
 - `include_images` disabled by default
 - `include_image_descriptions` disabled by default
 - If using 1Password: set `ONEPASSWORD_TAVILY_REFERENCE` to point at the credential field
-- Default mode writes the complete result to an auto-named file under `tmp/tavily/`; stdout prints a lightweight status object with `payload_schema`, and hints go to stderr
+- Default mode writes the complete result to an auto-named file under `tmp/tavily/` (or under `TAVILY_CLI_OUTPUT_DIR` when set); stdout prints a lightweight status object with `payload_schema`, and hints go to stderr
 - With `--output`, the complete result writes to the specified file; stdout still prints the lightweight status object with `payload_schema`
 - With `--stdout`, the complete payload prints directly to stdout without writing to disk
 
@@ -119,7 +123,7 @@ python -m tavily_skill search "latest Apple event stage photos" --images --image
 | `--image-descriptions` | Include LLM-generated image descriptions; if `--images` is not explicitly passed, the CLI auto-enables image results | `False` |
 | `--no-images` | Disable image results | `False` |
 | `--no-image-descriptions` | Return image URLs without descriptions | `False` |
-| `--output` | Write full result to a named JSON file; stdout still returns status schema | auto-writes to `tmp/tavily/` |
+| `--output` | Write full result to a named JSON file; stdout still returns status schema | auto-writes to `tmp/tavily/` or `TAVILY_CLI_OUTPUT_DIR` |
 
 ### `extract`
 
@@ -135,7 +139,7 @@ python -m tavily_skill search "latest Apple event stage photos" --images --image
 | `--no-images` | Disable image extraction | `False` |
 | `--favicon` | Return favicon URLs | `False` |
 | `--timeout` | Request timeout in seconds | `60` |
-| `--output` | Write full result to a named JSON file; stdout still returns status schema | auto-writes to `tmp/tavily/` |
+| `--output` | Write full result to a named JSON file; stdout still returns status schema | auto-writes to `tmp/tavily/` or `TAVILY_CLI_OUTPUT_DIR` |
 
 ## Image guidance
 
@@ -213,8 +217,8 @@ Integration tests hit the real Tavily API. If `TAVILY_API_KEY` is not set, confi
 
 ## Operational guidance
 
-- When running the Tavily CLI inside this workspace, prefer `./.venv/bin/python -m tavily_skill ...`. Do not assume a system `python` is available on PATH.
-- If you want to consume results directly in the current turn rather than writing to disk first, pass `--stdout`. Otherwise stdout only returns a lightweight status object, and the full payload lands under `tmp/tavily/`.
+- Run the CLI from this skill repo's root directory using its project-local interpreter: `./.venv/bin/python -m tavily_skill ...`. Do not run it from a parent workspace root, because the parent environment may not load this repo's `.env`, so `ONEPASSWORD_TAVILY_REFERENCE` / `TAVILY_API_KEY` may be missing even though sub-agents or project-local calls work.
+- If you want to consume results directly in the current turn rather than writing to disk first, pass `--stdout`. Otherwise stdout only returns a lightweight status object, and the full payload lands under `tmp/tavily/` (or `TAVILY_CLI_OUTPUT_DIR` when set).
 - For routine research, default to `--raw-content markdown`. Base judgments on `data.results[*].raw_content`, source URLs, page titles, snippet content, and — when needed — content pulled via `extract`.
 - Only pass `--raw-content off` when payload size is a confirmed bottleneck. Doing so means you must open the original links or continue with `extract` rather than relying solely on snippets.
 
