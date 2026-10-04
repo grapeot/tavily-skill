@@ -12,11 +12,12 @@ uv run pytest tests/ -v
 
 Coverage targets:
 
-- Argument parsing defaults and validation conflicts (`search` date modes, `extract` chunks without `--query`, mutually exclusive `--stdout`/`--output`).
+- Argument parsing defaults and validation conflicts (`search` date modes, `extract` chunks without `--query`, mutually exclusive `--stdout`/`--output`, `usage` timeout).
 - `_build_search_request`, `_build_extract_request`: Tavily SDK request shapes including `days=None` when absolute dates are set.
 - Response normalization: `result_count`, `failed_count`, `image_count`, stable envelope `{command, input, data}`.
+- `_normalize_usage_response`: plan/limit/remaining derivation, per-endpoint breakdown, and missing-field tolerance.
 - `_emit_payload`: stdout-only vs file mode (status JSON on stdout, human hints on stderr).
-- `_resolve_output_path`: respects `--stdout`, explicit `--output`, and default filename pattern under `get_default_output_dir()`.
+- `_resolve_output_path`: respects `--stdout`, explicit `--output`, and default filename pattern under `get_default_output_dir()` (including `usage`).
 
 These tests must not access the network and must not require API keys.
 
@@ -35,6 +36,7 @@ Alternatively unset `TAVILY_API_KEY` and rely on `ONEPASSWORD_TAVILY_REFERENCE` 
 Integration tests exercise:
 
 - End-to-end `search` and `extract` subprocess invocations (`python -m tavily_skill`).
+- `usage` is exercised at unit level through a monkeypatched `_fetch_usage`; it is not part of the paid integration tier because it consumes no credits.
 - Optional verification that the SDK receives the resolved API key when using a fake `tavily` module on `PYTHONPATH`.
 
 ## End-to-end

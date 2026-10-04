@@ -376,6 +376,123 @@ def test_run_extract_uses_client() -> None:
     assert payload["data"]["result_count"] == 1
 
 
+# ---------------------------------------------------------------------------
+# usage subcommand
+# ---------------------------------------------------------------------------
+
+
+def test_usage_parser_defaults() -> None:
+    parser = _build_parser()
+    args = parser.parse_args(["usage"])
+
+    assert args.command == "usage"
+    assert args.stdout is False
+    assert args.output is None
+    assert args.timeout == 60
+
+
+def test_usage_validate_rejects_stdout_with_output() -> None:
+    parser = _build_parser()
+    args = parser.parse_args(["usage", "--stdout", "--output", "/tmp/out.json"])
+
+    with pytest.raises(SystemExit):
+        tavily_cli._validate_args(parser, args)
+
+
+def test_usage_validate_rejects_nonpositive_timeout() -> None:
+    parser = _build_parser()
+    args = parser.parse_args(["usage", "--timeout", "0"])
+
+    with pytest.raises(SystemExit):
+        tavily_cli._validate_args(parser, args)
+
+
+def test_normalize_usage_response() -> None:
+    response = {
+        "key": {"usage": 819, "limit": None, "search_usage": 715, "extract_usage": 104},
+        "account": {
+            "current_plan": "Bootstrap",
+            "plan_usage": 1237,
+            "plan_limit": 15000,
+            "search_usage": 1129,
+            "crawl_usage": 0,
+            "extract_usage": 108,
+            "map_usage": 0,
+            "research_usage": 0,
+            "paygo_usage": 0,
+            "paygo_limit": None,
+        },
+    }
+
+    payload = tavily_cli._normalize_usage_response(response, 60)
+
+    assert payload["command"] == "usage"
+    data = payload["data"]
+    assert data["plan"] == "Bootstrap"
+    assert data["plan_usage"] == 1237
+    assert data["plan_limit"] == 15000
+    assert data["remaining_credits"] == 13763
+    assert data["breakdown"] == {"search": 1129, "crawl": 0, "extract": 108, "map": 0, "research": 0}
+    assert data["key_usage"] == 819
+    assert data["key_limit"] is None
+
+
+def test_normalize_usage_response_handles_missing_fields() -> None:
+    payload = tavily_cli._normalize_usage_response({}, 30)
+
+    data = payload["data"]
+    assert data["plan"] is None
+    assert data["plan_usage"] is None
+    assert data["plan_limit"] is None
+    assert data["remaining_credits"] is None
+    assert data["breakdown"] == {"search": None, "crawl": None, "extract": None, "map": None, "research": None}
+    assert payload["input"]["timeout"] == 30
+
+
+def test_normalize_usage_response_partial_account_has_no_remaining() -> None:
+    response = {"account": {"current_plan": "Bootstrap", "plan_usage": 10}}
+
+    payload = tavily_cli._normalize_usage_response(response)
+
+    assert payload["data"]["remaining_credits"] is None
+
+
+def test_usage_schema_registered() -> None:
+    schema = tavily_cli._payload_schema("usage")
+    assert "remaining_credits" in schema["data"]
+    assert "results" not in schema["data"]
+
+
+def test_run_usage_uses_fetch(monkeypatch: pytest.MonkeyPatch) -> None:
+    parser = _build_parser()
+    args = parser.parse_args(["usage", "--timeout", "15"])
+    captured: dict[str, object] = {}
+
+    def fake_fetch(api_key: str, timeout: float) -> dict[str, object]:
+        captured["api_key"] = api_key
+        captured["timeout"] = timeout
+        return {"account": {"current_plan": "Bootstrap", "plan_usage": 1, "plan_limit": 10}}
+
+    monkeypatch.setattr(tavily_cli, "_fetch_usage", fake_fetch)
+
+    payload = tavily_cli.run_usage(args, "tvly-test")
+
+    assert captured == {"api_key": "tvly-test", "timeout": 15}
+    assert payload["data"]["remaining_credits"] == 9
+    assert payload["input"]["timeout"] == 15
+
+
+def test_usage_default_output_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(tavily_cli._OUTPUT_DIR_ENV, str(tmp_path))
+    parser = _build_parser()
+    args = parser.parse_args(["usage"])
+
+    output_path = tavily_cli._resolve_output_path(args)
+
+    assert output_path is not None
+    assert "usage_" in Path(output_path).name
+
+
 def _integration_enabled() -> bool:
     return os.environ.get("RUN_TAVILY_INTEGRATION") == "1"
 
