@@ -2,7 +2,7 @@
 
 ## What this is
 
-Tavily Skill is a Python CLI that wraps the Tavily web search API for autonomous agents and shell pipelines. It provides two subcommands — `search` and `extract` — and normalizes all responses into a stable JSON envelope that downstream parsers can depend on regardless of SDK version drift.
+Tavily Skill is a Python CLI that wraps the Tavily web search API for autonomous agents and shell pipelines. It provides three subcommands — `search`, `extract`, and `usage` — and normalizes all responses into a stable JSON envelope that downstream parsers can depend on regardless of SDK version drift.
 
 The CLI is not a general-purpose replacement for Tavily's official tooling. It is purpose-built for a specific environment: an agent orchestration loop where Python is available, the caller is another program (not a human reading terminal output), and the cost of accidentally stuffing a megabyte-scale payload into an LLM context window is real.
 
@@ -130,9 +130,9 @@ This is not cosmetic. Every validation error that would surface as a cryptic HTT
 
 ## What is deliberately excluded
 
-The CLI covers the subset of Tavily features that agents use in practice: `search` and `extract`. It does not wrap `crawl`, `map`, or Tavily Research endpoints. These endpoints have different response shapes, different pagination semantics, and different error modes. Adding them would either require generalizing the envelope in ways that weaken the existing contract, or maintaining parallel envelope types that double the maintenance surface. Neither tradeoff is worth making until the additional endpoints are demonstrably needed in agent workflows.
+The CLI covers the subset of Tavily features that agents use in practice: `search`, `extract`, and `usage`. It does not wrap `crawl`, `map`, or Tavily Research endpoints. These endpoints have different response shapes, different pagination semantics, and different error modes. Adding them would either require generalizing the envelope in ways that weaken the existing contract, or maintaining parallel envelope types that double the maintenance surface. Neither tradeoff is worth making until the additional endpoints are demonstrably needed in agent workflows.
 
-The CLI does not cache results, manage API quotas, or provide billing dashboards. These are orchestration-layer concerns that belong in whatever system calls the CLI, not in the CLI itself.
+`usage` is a read-only account query, not a billing dashboard: it reports the plan and credit counters that Tavily exposes at `GET /usage`. The CLI does not cache results or manage quotas — those remain orchestration-layer concerns.
 
 ## Defaults and their rationale
 

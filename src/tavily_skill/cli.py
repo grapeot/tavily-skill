@@ -6,12 +6,17 @@ import datetime as dt
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any, Protocol
 
 from dotenv import load_dotenv
+
+USAGE_URL = "https://api.tavily.com/usage"
 
 DEFAULT_MAX_RESULTS = 6
 DEFAULT_SEARCH_DEPTH = "advanced"
@@ -113,6 +118,62 @@ def _build_client() -> SearchClient:
     tavily_module = __import__("tavily")
     client_class = getattr(tavily_module, "TavilyClient")
     return client_class(api_key=_get_api_key())
+
+
+def _fetch_usage(api_key: str, timeout: float = DEFAULT_TIMEOUT) -> dict[str, Any]:
+    request = urllib.request.Request(
+        USAGE_URL,
+        headers={"Authorization": f"Bearer {api_key}"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace").strip()
+        raise RuntimeError(f"Tavily usage request failed with HTTP {exc.code}: {detail or exc.reason}")
+    except (urllib.error.URLError, socket.timeout, TimeoutError, ConnectionError, OSError) as exc:
+        raise RuntimeError(f"Tavily usage request failed: {exc}")
+
+    try:
+        payload = json.loads(raw)
+    except ValueError as exc:
+        raise RuntimeError("Tavily usage response was not valid JSON") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("Tavily usage response was not a JSON object")
+    return payload
+
+
+def _normalize_usage_response(response: dict[str, Any], timeout: float = DEFAULT_TIMEOUT) -> dict[str, Any]:
+    key = response.get("key") if isinstance(response.get("key"), dict) else {}
+    account = response.get("account") if isinstance(response.get("account"), dict) else {}
+
+    plan_usage = account.get("plan_usage")
+    plan_limit = account.get("plan_limit")
+    remaining = None
+    if isinstance(plan_usage, (int, float)) and isinstance(plan_limit, (int, float)):
+        remaining = plan_limit - plan_usage
+
+    breakdown = {
+        name: account.get(f"{name}_usage")
+        for name in ("search", "crawl", "extract", "map", "research")
+    }
+
+    return {
+        "command": "usage",
+        "input": {"timeout": timeout},
+        "data": {
+            "plan": account.get("current_plan"),
+            "plan_usage": plan_usage,
+            "plan_limit": plan_limit,
+            "remaining_credits": remaining,
+            "breakdown": breakdown,
+            "paygo_usage": account.get("paygo_usage"),
+            "paygo_limit": account.get("paygo_limit"),
+            "key_usage": key.get("usage"),
+            "key_limit": key.get("limit"),
+        },
+    }
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -271,10 +332,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="Include favicon URLs in extract results",
     )
 
+    usage_parser = subparsers.add_parser("usage", help="Show Tavily account credit usage")
+    usage_parser.set_defaults(stdout=False)
+    usage_parser.add_argument(
+        "--stdout",
+        action="store_true",
+        help="Print the full JSON payload to stdout instead of writing it to the default output file",
+    )
+    usage_parser.add_argument(
+        "--output",
+        help="Write the full usage payload to a file and return status JSON on stdout",
+    )
+    usage_parser.add_argument(
+        "--timeout",
+        type=int,
+        default=DEFAULT_TIMEOUT,
+        help=f"Request timeout in seconds (default: {DEFAULT_TIMEOUT})",
+    )
+
     return parser
 
 
 def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    if args.command == "usage":
+        if args.timeout <= 0:
+            parser.error("--timeout must be greater than 0.")
+        if args.stdout and args.output:
+            parser.error("Use either --stdout or --output, not both.")
+        return
     if args.command != "search":
         if args.command == "extract":
             if args.timeout <= 0:
@@ -456,8 +541,10 @@ def _default_output_path(args: argparse.Namespace) -> str:
     timestamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
     if args.command == "search":
         seed = args.query
-    else:
+    elif args.command == "extract":
         seed = args.urls[0]
+    else:
+        seed = args.command
     slug = _slugify(seed)
     return str(get_default_output_dir() / f"{args.command}_{timestamp}_{slug}.json")
 
@@ -475,6 +562,21 @@ def _payload_schema(command: object) -> dict[str, Any]:
         "command": "string",
         "input": "object",
     }
+    if command == "usage":
+        return {
+            **base,
+            "data": {
+                "plan": "string|null",
+                "plan_usage": "number|null",
+                "plan_limit": "number|null",
+                "remaining_credits": "number|null",
+                "breakdown": "object",
+                "paygo_usage": "number|null",
+                "paygo_limit": "number|null",
+                "key_usage": "number|null",
+                "key_limit": "number|null",
+            },
+        }
     if command == "extract":
         return {
             **base,
@@ -514,6 +616,11 @@ def run_extract(client: SearchClient, args: argparse.Namespace) -> dict[str, Any
     return _normalize_extract_response(args, response)
 
 
+def run_usage(args: argparse.Namespace, api_key: str) -> dict[str, Any]:
+    response = _fetch_usage(api_key, args.timeout)
+    return _normalize_usage_response(response, args.timeout)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -521,14 +628,17 @@ def main(argv: list[str] | None = None) -> int:
     load_workspace_env(args.env_file)
 
     try:
-        client = _build_client()
-        if args.command == "search":
-            payload = run_search(client, args)
-        elif args.command == "extract":
-            payload = run_extract(client, args)
+        if args.command == "usage":
+            payload = run_usage(args, _get_api_key())
         else:
-            parser.error(f"Unsupported command: {args.command}")
-            return 1
+            client = _build_client()
+            if args.command == "search":
+                payload = run_search(client, args)
+            elif args.command == "extract":
+                payload = run_extract(client, args)
+            else:
+                parser.error(f"Unsupported command: {args.command}")
+                return 1
         _emit_payload(payload, _resolve_output_path(args))
         return 0
     except KeyboardInterrupt:

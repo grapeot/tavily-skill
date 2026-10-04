@@ -4,7 +4,7 @@ A CLI for AI agents to run Tavily web search and URL extraction. Not a human-fac
 
 ## What this gives you
 
-Two subcommands: `search` (web search with domain filters, time ranges, and image support) and `extract` (pull full-page content from URLs). All responses are normalized into a stable `{command, input, data}` JSON envelope that won't break when the Tavily SDK changes its response shape.
+Three subcommands: `search` (web search with domain filters, time ranges, and image support), `extract` (pull full-page content from URLs), and `usage` (show the account's plan and credit consumption). All responses are normalized into a stable `{command, input, data}` JSON envelope that won't break when the Tavily SDK changes its response shape.
 
 The default behavior writes the full payload to disk and returns a compact status JSON on stdout — so agents don't accidentally stuff megabyte-scale search results into their context windows unless they explicitly ask for them.
 
@@ -80,6 +80,9 @@ python -m tavily_skill search "latest AI news" --stdout
 
 # Extract full content from a URL
 python -m tavily_skill extract https://example.com/article --stdout
+
+# Check credit usage (plan, remaining credits, per-endpoint breakdown)
+python -m tavily_skill usage --stdout
 ```
 
 In default mode, stdout returns a status object like:
@@ -98,6 +101,28 @@ In default mode, stdout returns a status object like:
 The agent reads the `output_path` from the status and opens the file when it needs the actual results. The `payload_schema` field tells it the data shape before reading.
 
 When the agent passes `--stdout`, it receives the full search payload directly and should consume it in the current turn (don't pipe it into another subprocess without serializing first).
+
+The `usage` command reports the account plan and credit usage in the same envelope:
+
+```json
+{
+  "command": "usage",
+  "input": {"timeout": 60},
+  "data": {
+    "plan": "Bootstrap",
+    "plan_usage": 1237,
+    "plan_limit": 15000,
+    "remaining_credits": 13763,
+    "breakdown": {"search": 1129, "crawl": 0, "extract": 108, "map": 0, "research": 0},
+    "paygo_usage": 0,
+    "paygo_limit": null,
+    "key_usage": 819,
+    "key_limit": null
+  }
+}
+```
+
+`remaining_credits` is computed as `plan_limit - plan_usage` and is `null` when either side is absent. `plan_limit` has no dedicated remaining field upstream, so the CLI derives it.
 
 Key defaults the agent should be aware of — they are optimized for agent workflows and differ from human-facing Tavily usage:
 

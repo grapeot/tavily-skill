@@ -10,6 +10,8 @@ disable-model-invocation: true
 
 Real-time web search and URL content extraction through the Tavily Python SDK. The CLI defaults to writing full payloads to local JSON files and returning a lightweight status object on stdout; use `--stdout` when you need the complete JSON inline.
 
+This skill and `firecrawl-skill` run in parallel. **Prefer `firecrawl-skill` for new search/extract tasks; use this skill for its unique capabilities (LLM image descriptions, chunked extraction with `--chunks-per-source`) or when Firecrawl is unavailable/out of credits.**
+
 ## When to use
 
 Trigger when the user expresses any of these intents:
@@ -73,6 +75,14 @@ python -m tavily_skill search "AI coding tools" --stdout
 python -m tavily_skill extract https://tavily.com
 python -m tavily_skill extract https://tavily.com --query "agent search" --chunks-per-source 3 --output /tmp/tavily_extract.json
 ```
+
+### Check credit usage
+
+```bash
+python -m tavily_skill usage --stdout
+```
+
+Reports the account plan, credits used this cycle, remaining credits (`plan_limit - plan_usage`), a per-endpoint breakdown, and the current key's own usage.
 
 ### Disable images or raw content
 
@@ -140,6 +150,16 @@ python -m tavily_skill search "latest Apple event stage photos" --images --image
 | `--favicon` | Return favicon URLs | `False` |
 | `--timeout` | Request timeout in seconds | `60` |
 | `--output` | Write full result to a named JSON file; stdout still returns status schema | auto-writes to `tmp/tavily/` or `TAVILY_CLI_OUTPUT_DIR` |
+
+### `usage`
+
+| Parameter | Description | Default |
+|---|---|---|
+| `--stdout` | Print full payload directly to stdout | `False` |
+| `--output` | Write full usage payload to a named JSON file; stdout still returns status schema | auto-writes to `tmp/tavily/` or `TAVILY_CLI_OUTPUT_DIR` |
+| `--timeout` | Request timeout in seconds | `60` |
+
+`usage` calls `GET https://api.tavily.com/usage` directly (the Tavily SDK has no method for it) and normalizes the account/key usage into the standard envelope. `data.remaining_credits` is derived as `plan_limit - plan_usage` (`null` when either is missing).
 
 ## Image guidance
 
@@ -212,7 +232,7 @@ Integration tests hit the real Tavily API. If `TAVILY_API_KEY` is not set, confi
 
 - `--time-range` and `--start-date`/`--end-date` are mutually exclusive — use one or the other
 - `--chunks-per-source` requires `--query`
-- The currently stable commands are `search` and `extract`
+- The currently stable commands are `search`, `extract`, and `usage`
 - `--output` still produces JSON on stdout, but that stdout is the status schema, not the full search result
 
 ## Operational guidance

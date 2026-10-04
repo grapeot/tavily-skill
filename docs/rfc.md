@@ -73,9 +73,9 @@ Each section records a design decision embodied in the codebase, with the contex
 
 ## 8. Single-file implementation
 
-**Decision.** The entire CLI lives in `src/tavily_skill/cli.py` (560 lines). There is no separate module for argument parsing, output dispatch, or response normalization.
+**Decision.** The entire CLI lives in `src/tavily_skill/cli.py`. There is no separate module for argument parsing, output dispatch, or response normalization.
 
-**Context.** The surface area is small: two commands, two request builders, two response normalizers, one output dispatcher, one credential resolver. Splitting these into modules would create import graphs with one import per file — `from .args import build_parser`, `from .output import emit_payload`, `from .auth import get_api_key` — where each module is 30-80 lines. The indirection cost (jumping between files to trace a call path) outweighs any organizational benefit.
+**Context.** The surface area is small: three commands (`usage` has no request builder), two request builders, two response normalizers, one output dispatcher, one credential resolver. Splitting these into modules would create import graphs with one import per file — `from .args import build_parser`, `from .output import emit_payload`, `from .auth import get_api_key` — where each module is 30-80 lines. The indirection cost (jumping between files to trace a call path) outweighs any organizational benefit.
 
 **What was rejected.** A multi-module structure with `cli/parser.py`, `cli/auth.py`, `cli/normalize.py`, `cli/output.py`. This is the correct structure for a project where each module does distinct, substantial work. Here, the work is tightly coupled: response normalization needs access to argument namespaces, output dispatch needs access to normalized payloads. Keeping them together makes the data flow visible in a single scroll.
 
@@ -88,3 +88,13 @@ Each section records a design decision embodied in the codebase, with the contex
 **Context.** Tavily's aggregated answer is a convenience feature for human-facing applications. For agent workflows, it is the wrong default: the answer is a lossy summary produced by a model the agent doesn't control, and treating it as a primary information source introduces a second layer of hallucination risk on top of the source content. Agents perform better when they read the raw results and synthesize their own conclusions.
 
 **Consequences.** Search requests do not spend credits on answer generation, and agents cannot consume the generated answer through the CLI's payload or schema. The `include_answer` parameter remains explicit in every SDK request so this behavior cannot depend on upstream defaults.
+
+## 10. `usage` bypasses the SDK and calls the REST endpoint directly
+
+**Decision.** The `usage` subcommand calls `GET https://api.tavily.com/usage` with `urllib.request` and the resolved API key, rather than going through `TavilyClient`. It reuses the same credential chain, envelope, file-first output, and validation-before-call rules as the other subcommands.
+
+**Context.** Tavily's usage/plan endpoint is not exposed by the Python SDK. The credit-consumption data is account-level metadata, distinct from the content endpoints, but agents that budget their own search spend need it in the same machine-readable shape as everything else.
+
+**What was rejected.** Shelling out to `curl` (adds an external dependency and breaks the single-interpreter contract), and leaving usage out entirely (operators would keep re-deriving it ad hoc).
+
+**Consequences.** The CLI gains a third subcommand with no new runtime dependency; `_fetch_usage` is the only place that talks to a non-content endpoint, and it is a plain GET whose JSON maps onto the existing `{command, input, data}` envelope. `data.remaining_credits` is computed client-side because the upstream `limit` field is `null`; `plan_usage`/`plan_limit` are the authoritative pair.

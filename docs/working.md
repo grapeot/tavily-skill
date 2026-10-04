@@ -17,6 +17,10 @@
 
 - Documented `TAVILY_CLI_OUTPUT_DIR` in the skill file (new "First-time setup" section: recommend a dedicated persistent output directory once during initial setup), README, and `.env.example`.
 
+## 2026-10-03
+
+- Added `usage` subcommand: calls `GET https://api.tavily.com/usage` (the SDK has no method for it), normalizes plan/usage into the standard envelope, and derives `data.remaining_credits` from `plan_limit - plan_usage`. Same credential chain, validation, and file-first output as `search`/`extract`.
+
 ## Lessons Learned
 
 - Default artifact directory resolves from current working directory (`./tmp/tavily/`); override with `TAVILY_CLI_OUTPUT_DIR` when jobs must isolate outputs.
