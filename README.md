@@ -188,6 +188,12 @@ Key defaults the agent should be aware of — they are optimized for agent workf
 
 The full parameter reference is in [`skills/skill_tavily.md`](skills/skill_tavily.md).
 
+## Performance
+
+For independent queries, batch mode collapses N separate round-trips into one parallel wave. Each standalone invocation re-pays a fixed cost — process start, TLS setup, and credential resolution (an optional `op read` adds roughly a second per call) — and its API wait cannot overlap with the others. Passing several `--query` flags runs them in one process, with `--concurrency` controlling parallelism, so both the fixed overhead and the wait time are paid once instead of N times.
+
+[`benchmarks/latency.py`](benchmarks/latency.py) measures this against the real API and reports the speedup of `batch-parallel` over `standalone`. It is opt-in (`RUN_TAVILY_LATENCY=1`) because it spends real credits. See [`benchmarks/README.md`](benchmarks/README.md) for the methodology.
+
 ## Developing
 
 If you're contributing to the CLI itself:

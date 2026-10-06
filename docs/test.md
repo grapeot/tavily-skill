@@ -22,6 +22,7 @@ Coverage targets:
 - `_normalize_usage_response`: plan/limit/remaining derivation, per-endpoint breakdown, and missing-field tolerance.
 - `_emit_payload`: stdout-only vs file mode (status JSON on stdout, human hints on stderr).
 - `_resolve_output_path`: respects `--stdout`, explicit `--output`, and default filename pattern under `get_default_output_dir()` (including `usage`).
+- Benchmark pure helpers (`tests/test_bench_latency.py`): `benchmarks/latency.py` argument defaults and validation, unique-query generation, median and speedup computation, report shaping, command/env construction, the `RUN_TAVILY_LATENCY` gate, and the skip path. `subprocess.run` is mocked throughout, so these tests make no API calls and spend no credits.
 
 These tests must not access the network and must not require API keys.
 
