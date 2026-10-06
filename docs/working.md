@@ -25,6 +25,8 @@
 
 - Added multi-query batch mode to `search`: repeatable `--query`, optional positional `query`, `--concurrency N` (default 4) and `--serial`, execution via `ThreadPoolExecutor` over the shared SDK client. One auto-named JSON file per query (index suffix on collision), exactly one batch status envelope on stdout, `--output`/`--stdout` rejected in batch mode. Partial failure exits 0 with per-query errors and a stderr warning; all-failure exits 1; usage errors exit 2.
 - Unified the batch envelope with the sibling `firecrawl-skill`: replaced top-level `mode`/flat counts with `output_mode: "batch"` and nested `summary` (`query_count`/`success_count`/`failed_count`/`credits_used`), added `output_dir` and an `input` block, and changed per-query `error` to `{"http_status", "error"}`. Also reject empty/whitespace-only queries (exit 2) and stop the thread pool from blocking on Ctrl-C so the process returns 130 promptly.
+- Added an opt-in latency benchmark (`benchmarks/latency.py`, `benchmarks/README.md`) comparing standalone, `batch-parallel`, and `batch-serial` search with real API calls. Gated by `RUN_TAVILY_LATENCY=1`; unique per-run queries defeat provider caching; children are pointed at a temporary `TAVILY_CLI_OUTPUT_DIR`. Added offline unit tests for the pure helpers.
+- Documented the performance model: a "Performance" section in the README and a "Speed optimization" section in the skill covering batch reuse of process/credential setup and recommending a raw local `TAVILY_API_KEY` so the CLI skips the ~0.9s `op read`.
 
 ## Lessons Learned
 
@@ -33,3 +35,4 @@
 - Enforce untrusted upstream-field exclusions in response normalization rather than relying on agent instructions.
 - Reserve batch output filenames on the main thread before dispatching workers; deriving names inside threads races on the shared timestamp+slug and can silently overwrite files.
 - Time-based tests for parallelism should compare measured parallel wall time against measured serial wall time from the same test, not against an absolute constant, so slow CI machines don't produce false failures.
+- Latency benchmarks must use unique queries per run. Reusing identical queries let a warm provider cache make a batch read faster than a single cold call, which is not the effect being measured.

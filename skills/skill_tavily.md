@@ -295,6 +295,20 @@ Integration tests hit the real Tavily API. If `TAVILY_API_KEY` is not set, confi
 - For routine research, default to `--raw-content markdown`. Base judgments on `data.results[*].raw_content`, source URLs, page titles, snippet content, and — when needed — content pulled via `extract`.
 - Only pass `--raw-content off` when payload size is a confirmed bottleneck. Doing so means you must open the original links or continue with `extract` rather than relying solely on snippets.
 
+## Speed optimization
+
+When several queries are independent, do not spawn one CLI process per query. Pass them as repeatable `--query` flags so they run in a single process, one parallel wave:
+
+```bash
+python -m tavily_skill search --query "q1" --query "q2" --query "q3" --concurrency 4
+```
+
+Every standalone invocation re-pays fixed costs that have nothing to do with the search itself: Python process start, TLS connection setup, and credential resolution. If the key comes from `ONEPASSWORD_TAVILY_REFERENCE`, each call shells out to `op read`, which alone costs roughly 0.9s. With N queries that is N times the fixed cost plus N serial API waits; batch mode pays the fixed cost once and overlaps the waits.
+
+The cheapest additional win is removing the `op read` step entirely. Put a raw `TAVILY_API_KEY=...` in the repository's local, gitignored `.env` so the CLI reads it directly and never invokes 1Password. Never commit that file or paste the key anywhere shared.
+
+To quantify the gain on your own machine, run the opt-in benchmark at [`benchmarks/latency.py`](../benchmarks/latency.py) (set `RUN_TAVILY_LATENCY=1`; it spends real credits).
+
 ## More detail
 
 - Operator-facing docs: `README.md`, `docs/prd.md`, `docs/rfc.md`

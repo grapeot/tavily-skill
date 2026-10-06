@@ -21,6 +21,8 @@ Treat **repository root** as the default cwd in docs and examples; avoid machine
 
 Python **3.10+**. Use `uv pip install -e '.[dev]'` inside `./.venv`. Integration tests spend Tavily credits; gate them with `RUN_TAVILY_INTEGRATION=1`.
 
+Latency benchmark against the real API (opt-in, spends credits): `RUN_TAVILY_LATENCY=1 .venv/bin/python benchmarks/latency.py --queries 4 --repeats 3`. Without the env var it prints a skip note and exits 0; see `benchmarks/README.md`.
+
 ## Packaging
 
 - Python package: **`tavily_skill`**
