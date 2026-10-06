@@ -2,7 +2,7 @@
 
 ## What this is
 
-Tavily Skill is a Python CLI that wraps the Tavily web search API for autonomous agents and shell pipelines. It provides three subcommands — `search`, `extract`, and `usage` — and normalizes all responses into a stable JSON envelope that downstream parsers can depend on regardless of SDK version drift.
+Tavily Skill is a Python CLI that wraps the Tavily web search API for autonomous agents and shell pipelines. It provides three subcommands — `search`, `extract`, and `usage` — and normalizes all responses into a stable JSON envelope that downstream parsers can depend on regardless of SDK version drift. `search` runs a single query by default and switches to batch mode when given one or more repeatable `--query` values, so an agent can launch many independent searches in one process instead of paying one model round-trip per invocation.
 
 The CLI is not a general-purpose replacement for Tavily's official tooling. It is purpose-built for a specific environment: an agent orchestration loop where Python is available, the caller is another program (not a human reading terminal output), and the cost of accidentally stuffing a megabyte-scale payload into an LLM context window is real.
 
@@ -89,11 +89,13 @@ The `input` field captures the exact arguments the caller passed. This is not de
 
 ### Output semantics
 
-The CLI has two output modes, and the default is the one that protects LLM context windows.
+For a single query the CLI has two output modes, and the default is the one that protects LLM context windows. Batch mode adds a third, file-only mode described below.
 
 **File mode (default).** The full JSON payload writes to `./tmp/tavily/<command>_<timestamp>_<slug>.json`. The CLI prints a compact status object to stdout — `{command, status, output_path, summary, payload_schema}` — and a one-line confirmation to stderr. An agent calling this from a subprocess reads the status from stdout, extracts the file path, and only reads the full payload when it actually needs the results. The status object includes `payload_schema`, so the agent knows the shape of the data before opening the file.
 
 **Stdout mode (`--stdout`).** The full payload prints to stdout. No file is written. This mode exists for one-shot tooling — `jq` pipelines, ephemeral queries — where the caller explicitly opts into receiving the full body inline.
+
+**Batch mode (`--query` repeated).** Each `--query` value is one complete query. The process runs them with a thread pool (default concurrency 4; `--serial` forces sequential) and writes one full payload file per query, preserving the "one query = one file" corpus invariant. Stdout receives exactly one lightweight batch status envelope, reusing `output_mode: "batch"` and nesting counts under `summary` (`query_count`, `success_count`, `failed_count`, `credits_used`), with one `{query, output_path, summary, error}` entry per query — never raw content. `input` echoes the effective parameters (including the effective `concurrency`), and `output_dir` reports where files landed. The top-level shape matches the sibling `firecrawl-skill` so agents can parse both with one code path. `--output` and `--stdout` are rejected here, since per-query file naming is automatic; empty or whitespace-only queries are usage errors. A partial failure returns exit 0 with per-query errors in the envelope plus a stderr warning; if every query fails the process returns exit 1. The positional single-query form is unchanged and mutually exclusive with `--query`.
 
 The key design choice: file mode is the default because the default caller is an agent loop, not a human. If a human wants inline output, they pass `--stdout`. The tradeoff is ergonomics for readability, and the CLI leans toward the former because readability is the agent's problem, not the tool's.
 
@@ -122,7 +124,8 @@ No hard-coded absolute paths exist in the codebase. A clone on any machine, in a
 All argument validation happens before any API call. The parser enforces:
 
 - Mutual exclusion: `--time-range` vs `--start-date`/`--end-date`, `--stdout` vs `--output`
-- Range: `max_results` between 1 and 20, `timeout` > 0
+- Mode selection on `search`: positional `query` vs `--query`, both present or neither present is an error; `--output`/`--stdout` are rejected in batch mode
+- Range: `max_results` between 1 and 20, `timeout` > 0, `concurrency` >= 1
 - Dependency: `--chunks-per-source` requires `--query` on `extract`
 - Implicit enable: `--image-descriptions` implicitly enables `--images` (because descriptions without images don't make API sense)
 
@@ -143,6 +146,7 @@ Every default is set to minimize surprise in agent workflows:
 - `raw_content=markdown` — the structured content is what agents actually read; turning it off is an optimization, not the default
 - `include_images=False` — most research workflows don't consume images; including them silently inflates payload size
 - `topic=general` — the least presumptuous default; `news` and `finance` are domain-specific optimizations that callers opt into
+- `concurrency=4` in batch mode — enough overlap to hide network latency without flooding the API or the local thread pool; `--serial` is available when determinism or rate limits matter
 
 ## Testing strategy
 

@@ -13,7 +13,11 @@ uv run pytest tests/ -v
 Coverage targets:
 
 - Argument parsing defaults and validation conflicts (`search` date modes, `extract` chunks without `--query`, mutually exclusive `--stdout`/`--output`, `usage` timeout).
-- `_build_search_request`, `_build_extract_request`: Tavily SDK request shapes including `days=None` when absolute dates are set.
+- Batch search mode: positional vs `--query` mutual exclusion, missing/empty/whitespace-only queries, `--output`/`--stdout` rejection, non-positive `--concurrency`, and `--serial` overriding `--concurrency`.
+- `_build_search_request`, `_build_extract_request`: Tavily SDK request shapes including `days=None` when absolute dates are set, and per-query overrides in batch mode.
+- Batch execution: one auto-named file per query, index suffix on filename collision, and a single canonical batch envelope (`command`, `status`, `output_mode: "batch"`, `output_dir`, `input`, nested `summary` counts, `results`) with per-query `{query, output_path, summary, error}` entries.
+- Batch concurrency: a stubbed search that sleeps shows concurrent queries finish materially faster than `--serial` wall time.
+- Batch error semantics: partial failure returns exit 0 with per-query `{http_status, error}` entries and a stderr warning; all-queries failure returns exit 1; argparse usage errors return exit 2; Ctrl-C returns exit 130.
 - Response normalization: `result_count`, `failed_count`, `image_count`, stable envelope `{command, input, data}`.
 - `_normalize_usage_response`: plan/limit/remaining derivation, per-endpoint breakdown, and missing-field tolerance.
 - `_emit_payload`: stdout-only vs file mode (status JSON on stdout, human hints on stderr).
