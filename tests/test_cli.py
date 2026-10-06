@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -732,3 +733,280 @@ def test_cli_resolves_api_key_through_onepassword_reference(
     assert log_path.exists()
     logged = json.loads(log_path.read_text(encoding="utf-8"))
     assert logged["api_key"] == expected_key
+
+
+# ---------------------------------------------------------------------------
+# batch search mode (--query)
+# ---------------------------------------------------------------------------
+
+
+class SlowStubClient(StubClient):
+    def __init__(self, delay: float = 0.5, fail_queries: set[str] | None = None) -> None:
+        super().__init__()
+        self.delay = delay
+        self.fail_queries = fail_queries or set()
+
+    def search(self, **kwargs: object) -> dict[str, object]:
+        time.sleep(self.delay)
+        query = kwargs["query"]
+        if query in self.fail_queries:
+            raise RuntimeError(f"boom: {query}")
+        return super().search(**kwargs)
+
+
+def _parse_search(queries: list[str], *extra: str) -> argparse.Namespace:
+    parser = _build_parser()
+    argv = ["search"]
+    for query in queries:
+        argv += ["--query", query]
+    argv += list(extra)
+    return parser.parse_args(argv)
+
+
+def test_search_positional_still_single_mode() -> None:
+    parser = _build_parser()
+    args = parser.parse_args(["search", "latest ai"])
+
+    assert args.query == "latest ai"
+    assert args.queries is None
+    tavily_cli._validate_args(parser, args)
+
+
+def test_search_query_option_single_mode() -> None:
+    parser = _build_parser()
+    args = parser.parse_args(["search", "--query", "latest ai"])
+
+    assert args.query is None
+    assert args.queries == ["latest ai"]
+    tavily_cli._validate_args(parser, args)
+
+
+def test_search_query_option_keeps_multiword_queries_intact() -> None:
+    parser = _build_parser()
+    args = parser.parse_args(["search", "--query", "a b c", "--query", "d e"])
+
+    assert args.queries == ["a b c", "d e"]
+
+
+def test_search_rejects_positional_and_query_together() -> None:
+    parser = _build_parser()
+    args = parser.parse_args(["search", "positional", "--query", "option"])
+
+    with pytest.raises(SystemExit):
+        tavily_cli._validate_args(parser, args)
+
+
+def test_search_rejects_missing_query() -> None:
+    parser = _build_parser()
+    args = parser.parse_args(["search"])
+
+    with pytest.raises(SystemExit):
+        tavily_cli._validate_args(parser, args)
+
+
+def test_search_batch_rejects_output_flag() -> None:
+    parser = _build_parser()
+    args = parser.parse_args(["search", "--query", "a", "--output", "/tmp/out.json"])
+
+    with pytest.raises(SystemExit):
+        tavily_cli._validate_args(parser, args)
+
+
+def test_search_batch_rejects_stdout_flag() -> None:
+    parser = _build_parser()
+    args = parser.parse_args(["search", "--query", "a", "--stdout"])
+
+    with pytest.raises(SystemExit):
+        tavily_cli._validate_args(parser, args)
+
+
+def test_search_batch_rejects_nonpositive_concurrency() -> None:
+    parser = _build_parser()
+    args = parser.parse_args(["search", "--query", "a", "--concurrency", "0"])
+
+    with pytest.raises(SystemExit):
+        tavily_cli._validate_args(parser, args)
+
+
+def test_search_serial_overrides_concurrency() -> None:
+    parallel = _parse_search(["a"], "--concurrency", "8")
+    serial = _parse_search(["a"], "--concurrency", "8", "--serial")
+
+    assert tavily_cli._effective_concurrency(parallel) == 8
+    assert tavily_cli._effective_concurrency(serial) == 1
+
+
+def test_batch_query_request_uses_per_query_value() -> None:
+    args = _parse_search(["alpha", "beta"])
+    request = tavily_cli._build_search_request(args, "beta")
+
+    assert request["query"] == "beta"
+    assert request["search_depth"] == "advanced"
+    assert request["max_results"] == 6
+    assert request["include_raw_content"] == "markdown"
+
+
+def test_run_search_batch_writes_one_file_per_query(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(tavily_cli._OUTPUT_DIR_ENV, str(tmp_path))
+    args = _parse_search(["first query", "second query"])
+    client = StubClient()
+
+    envelope, exit_code = tavily_cli.run_search_batch(client, args)
+
+    assert exit_code == 0
+    assert envelope["mode"] == "batch"
+    assert envelope["query_count"] == 2
+    assert envelope["success_count"] == 2
+    assert envelope["error_count"] == 0
+    assert envelope["status"] == "ok"
+    assert len(client.search_calls) == 2
+    assert sorted(call["query"] for call in client.search_calls) == ["first query", "second query"]
+
+    for entry in envelope["results"]:
+        output_path = Path(entry["output_path"])
+        assert output_path.exists()
+        payload = json.loads(output_path.read_text(encoding="utf-8"))
+        assert payload["command"] == "search"
+        assert payload["input"]["query"] == entry["query"]
+        assert entry["summary"]["result_count"] == 1
+        assert entry["error"] is None
+
+
+def test_run_search_batch_appends_index_on_name_collision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(tavily_cli._OUTPUT_DIR_ENV, str(tmp_path))
+    args = _parse_search(["same query", "same query"])
+    client = StubClient()
+
+    envelope, _ = tavily_cli.run_search_batch(client, args)
+
+    paths = [entry["output_path"] for entry in envelope["results"]]
+    assert len(set(paths)) == 2
+    assert all(Path(path).exists() for path in paths)
+
+
+def test_run_search_batch_runs_parallel_faster_than_serial(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(tavily_cli._OUTPUT_DIR_ENV, str(tmp_path))
+    queries = ["q1", "q2", "q3", "q4"]
+    delay = 0.5
+
+    serial_args = _parse_search(queries, "--serial")
+    parallel_args = _parse_search(queries, "--concurrency", "4")
+
+    started = time.monotonic()
+    tavily_cli.run_search_batch(SlowStubClient(delay=delay), serial_args)
+    serial_elapsed = time.monotonic() - started
+
+    started = time.monotonic()
+    tavily_cli.run_search_batch(SlowStubClient(delay=delay), parallel_args)
+    parallel_elapsed = time.monotonic() - started
+
+    assert serial_elapsed > len(queries) * delay * 0.9
+    assert parallel_elapsed < serial_elapsed - delay
+    assert parallel_elapsed < serial_elapsed * 0.75
+
+
+def test_main_batch_success_emits_single_envelope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv(tavily_cli._OUTPUT_DIR_ENV, str(tmp_path))
+    monkeypatch.setattr(tavily_cli, "_build_client", lambda: StubClient())
+
+    exit_code = tavily_cli.main(["search", "--query", "a", "--query", "b"])
+
+    captured = capsys.readouterr()
+    envelope = json.loads(captured.out)
+    assert exit_code == 0
+    assert envelope["mode"] == "batch"
+    assert envelope["status"] == "ok"
+    assert envelope["query_count"] == 2
+    assert captured.err == ""
+
+
+def test_main_batch_partial_failure_returns_zero(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv(tavily_cli._OUTPUT_DIR_ENV, str(tmp_path))
+    monkeypatch.setattr(
+        tavily_cli,
+        "_build_client",
+        lambda: SlowStubClient(delay=0.0, fail_queries={"bad"}),
+    )
+
+    exit_code = tavily_cli.main(["search", "--query", "good", "--query", "bad"])
+
+    captured = capsys.readouterr()
+    envelope = json.loads(captured.out)
+    assert exit_code == 0
+    assert envelope["status"] == "partial"
+    assert envelope["success_count"] == 1
+    assert envelope["error_count"] == 1
+
+    good = next(entry for entry in envelope["results"] if entry["query"] == "good")
+    bad = next(entry for entry in envelope["results"] if entry["query"] == "bad")
+    assert Path(good["output_path"]).exists()
+    assert bad["output_path"] is None
+    assert bad["summary"] is None
+    assert bad["error"]["type"] == "RuntimeError"
+    assert "Warning" in captured.err
+
+
+def test_main_batch_all_failures_return_one(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv(tavily_cli._OUTPUT_DIR_ENV, str(tmp_path))
+    monkeypatch.setattr(
+        tavily_cli,
+        "_build_client",
+        lambda: SlowStubClient(delay=0.0, fail_queries={"a", "b"}),
+    )
+
+    exit_code = tavily_cli.main(["search", "--query", "a", "--query", "b"])
+
+    captured = capsys.readouterr()
+    envelope = json.loads(captured.out)
+    assert exit_code == 1
+    assert envelope["status"] == "error"
+    assert envelope["success_count"] == 0
+    assert envelope["error_count"] == 2
+    assert "Warning" in captured.err
+
+
+def test_main_single_mode_unchanged(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv(tavily_cli._OUTPUT_DIR_ENV, str(tmp_path))
+    monkeypatch.setattr(tavily_cli, "_build_client", lambda: StubClient())
+
+    exit_code = tavily_cli.main(["search", "latest ai"])
+
+    captured = capsys.readouterr()
+    status_payload = json.loads(captured.out)
+    assert exit_code == 0
+    assert status_payload["command"] == "search"
+    assert status_payload["output_mode"] == "file"
+    assert "mode" not in status_payload
+    assert Path(status_payload["output_path"]).exists()
+
+
+def test_main_usage_error_exits_two() -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        tavily_cli.main(["search"])
+
+    assert excinfo.value.code == 2

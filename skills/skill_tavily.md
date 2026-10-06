@@ -57,6 +57,18 @@ python -m tavily_skill search "agent framework" \
   --include-domain docs.anthropic.com
 ```
 
+### Batch several independent searches in one process
+
+```bash
+python -m tavily_skill search \
+  --query "latest AI news" \
+  --query "openai releases" \
+  --query "anthropic news" \
+  --concurrency 4
+```
+
+Each `--query` value is one complete query string (multi-word values are not split). The positional `query` form still works and is mutually exclusive with `--query`; passing both or neither is a usage error. Batch mode writes one auto-named file per query and prints exactly one batch status envelope to stdout; `--stdout` and `--output` are single-mode only. Add `--serial` (or `--concurrency 1`) to run sequentially; `--serial` wins over `--concurrency`.
+
 ### Write to a named file
 
 ```bash
@@ -109,6 +121,7 @@ python -m tavily_skill search "latest Apple event stage photos" --images --image
 - Default mode writes the complete result to an auto-named file under `tmp/tavily/` (or under `TAVILY_CLI_OUTPUT_DIR` when set); stdout prints a lightweight status object with `payload_schema`, and hints go to stderr
 - With `--output`, the complete result writes to the specified file; stdout still prints the lightweight status object with `payload_schema`
 - With `--stdout`, the complete payload prints directly to stdout without writing to disk
+- With one or more `--query`, batch mode writes one auto-named file per query and prints exactly one batch status envelope to stdout (no raw content inline); `--output` and `--stdout` are rejected
 
 ## Parameter reference
 
@@ -116,7 +129,10 @@ python -m tavily_skill search "latest Apple event stage photos" --images --image
 
 | Parameter | Description | Default |
 |---|---|---|
-| `query` | Search query | required |
+| `query` | Search query (single mode; mutually exclusive with `--query`) | — |
+| `--query` | Repeatable batch query; each value is a complete query string. Enables batch mode and is mutually exclusive with the positional `query` | — |
+| `--concurrency` | Max parallel searches in batch mode | `4` |
+| `--serial` | Force sequential batch execution; overrides `--concurrency` | `False` |
 | `--max-results` | Number of results, range 1–20 | `6` |
 | `--search-depth` | `basic` / `advanced` / `fast` / `ultra-fast` | `advanced` |
 | `--topic` | `general` / `news` / `finance` | `general` |
@@ -212,6 +228,25 @@ In default mode, `search`'s `data.results` retains the result items returned by 
 
 In default mode, stdout does not return this full payload. It returns a lightweight object containing the output path, summary information, and payload schema. The full payload only prints to stdout when `--stdout` is passed.
 
+In batch mode, stdout returns exactly one batch status envelope. Every entry follows the per-query schema `{"query", "output_path", "summary", "error"}`, where `summary` is `{"result_count", "image_count"}` and `error` is `null` or `{"type", "message"}`:
+
+```json
+{
+  "command": "search",
+  "mode": "batch",
+  "status": "ok",
+  "query_count": 3,
+  "success_count": 3,
+  "error_count": 0,
+  "results": [
+    {"query": "q1", "output_path": "...", "summary": {"result_count": 6, "image_count": 0}, "error": null}
+  ],
+  "payload_schema": {}
+}
+```
+
+`status` is `ok` (all succeeded), `partial` (some failed), or `error` (all failed). Partial failure returns exit 0 with a stderr warning; if every query fails the exit code is 1. Usage errors exit 2.
+
 ## Testing
 
 Run unit tests only (default):
@@ -231,9 +266,11 @@ Integration tests hit the real Tavily API. If `TAVILY_API_KEY` is not set, confi
 ## Notes
 
 - `--time-range` and `--start-date`/`--end-date` are mutually exclusive — use one or the other
-- `--chunks-per-source` requires `--query`
+- `--chunks-per-source` requires `--query` (the `extract` flag, not the `search` batch flag)
 - The currently stable commands are `search`, `extract`, and `usage`
 - `--output` still produces JSON on stdout, but that stdout is the status schema, not the full search result
+- On `search`, the positional query and the repeatable `--query` are mutually exclusive; `--output` and `--stdout` are rejected in batch mode
+- On `search`, a positional query keeps the existing single-file status contract; batch mode returns one envelope and writes one file per query
 
 ## Operational guidance
 

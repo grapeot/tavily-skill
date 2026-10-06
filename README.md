@@ -83,6 +83,9 @@ python -m tavily_skill extract https://example.com/article --stdout
 
 # Check credit usage (plan, remaining credits, per-endpoint breakdown)
 python -m tavily_skill usage --stdout
+
+# Batch: many independent searches in ONE process, one auto-named file per query
+python -m tavily_skill search --query "latest AI news" --query "openai releases" --query "anthropic news"
 ```
 
 In default mode, stdout returns a status object like:
@@ -101,6 +104,42 @@ In default mode, stdout returns a status object like:
 The agent reads the `output_path` from the status and opens the file when it needs the actual results. The `payload_schema` field tells it the data shape before reading.
 
 When the agent passes `--stdout`, it receives the full search payload directly and should consume it in the current turn (don't pipe it into another subprocess without serializing first).
+
+### Batch search
+
+An agent that needs several independent searches used to pay one model round-trip per CLI invocation. Batch mode collapses that into a single call: pass a repeatable `--query` flag, each value a complete query string, and the CLI runs them all in one process. Multi-word values are never split.
+
+```bash
+python -m tavily_skill search --query "q1" --query "q2" --query "q3"
+```
+
+The positional `query` form is unchanged and mutually exclusive with `--query`; passing both (or neither) is a usage error (exit 2). `--output` and `--stdout` are single-mode only — in batch mode they are usage errors, because each query owns its own auto-named file.
+
+Batch execution uses a thread pool over the shared Tavily SDK client. `--concurrency N` caps parallelism (default 4) and `--serial` forces sequential execution (equivalent to `--concurrency 1`); `--serial` wins when both are passed.
+
+Batch mode prints exactly one JSON status envelope to stdout. It carries one entry per query and never inlines raw content:
+
+```json
+{
+  "command": "search",
+  "mode": "batch",
+  "status": "ok",
+  "query_count": 3,
+  "success_count": 3,
+  "error_count": 0,
+  "results": [
+    {
+      "query": "q1",
+      "output_path": "tmp/tavily/search_20261005_143022_q1.json",
+      "summary": {"result_count": 6, "image_count": 0},
+      "error": null
+    }
+  ],
+  "payload_schema": { ... }
+}
+```
+
+`status` is `ok` when every query succeeds, `partial` when some fail, and `error` when all fail. Partial failure returns exit 0 and adds a stderr warning; if every query fails, the exit code is 1. Single-query behavior, output format, and exit codes are unchanged.
 
 The `usage` command reports the account plan and credit usage in the same envelope:
 

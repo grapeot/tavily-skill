@@ -98,3 +98,16 @@ Each section records a design decision embodied in the codebase, with the contex
 **What was rejected.** Shelling out to `curl` (adds an external dependency and breaks the single-interpreter contract), and leaving usage out entirely (operators would keep re-deriving it ad hoc).
 
 **Consequences.** The CLI gains a third subcommand with no new runtime dependency; `_fetch_usage` is the only place that talks to a non-content endpoint, and it is a plain GET whose JSON maps onto the existing `{command, input, data}` envelope. `data.remaining_credits` is computed client-side because the upstream `limit` field is `null`; `plan_usage`/`plan_limit` are the authoritative pair.
+
+## 11. Batch search over a repeatable `--query`, one file per query
+
+**Decision.** `search` accepts a repeatable `--query` flag. One or more `--query` values switch it into batch mode: the process runs every query internally and prints a single batch status envelope. The positional `query` argument becomes optional (`nargs="?"`) but keeps the single-query contract unchanged. Positional query and `--query` are mutually exclusive, as are "neither present" and passing `--output` or `--stdout` in batch mode.
+
+**Context.** An agent that needs ten independent searches previously paid ten model round-trips to invoke the CLI ten times, even though the searches themselves are independent HTTP calls. The round-trips, not the API latency, dominated the cost. Collapsing them into one process removes the round-trips while preserving the `{command, input, data}` file payload for each query.
+
+**What was rejected.**
+- A new `batch` subcommand. It would duplicate every search flag and split the search argument surface into two parsers that drift.
+- A comma- or newline-delimited single `--query` string. Splitting on delimiter characters silently mangles legitimate multi-word queries and forces escaping rules on callers.
+- Inlining all batch results into one stdout object. That reintroduces exactly the context-window blowup the file-first design exists to prevent, and breaks the "one query = one file" corpus invariant.
+
+**Consequences.** Parallelism uses `concurrent.futures.ThreadPoolExecutor` from the standard library, defaulting to `--concurrency 4` with `--serial` forcing sequential execution. The Tavily SDK client is HTTP-based, so a single client instance is shared across worker threads; if the SDK ever gains non-thread-safe state, the fallback is to build one client per call. Output paths are reserved on the main thread before dispatch, so concurrent workers never race on filename allocation and colliding auto-names get a numeric suffix. Per-query failures are isolated: a partial failure returns exit 0 with the error recorded in the envelope entry and a stderr warning, and only an all-queries failure returns exit 1, consistent with the existing single-query exit-code scheme. Usage errors still exit 2 through argparse.

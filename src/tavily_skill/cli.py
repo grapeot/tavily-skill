@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import datetime as dt
 import json
 import os
@@ -23,6 +24,7 @@ DEFAULT_SEARCH_DEPTH = "advanced"
 DEFAULT_TOPIC = "general"
 DEFAULT_RAW_CONTENT = "markdown"
 DEFAULT_TIMEOUT = 60
+DEFAULT_CONCURRENCY = 4
 DEFAULT_EXTRACT_DEPTH = "advanced"
 DEFAULT_EXTRACT_FORMAT = "markdown"
 SEARCH_DEPTH_CHOICES = ["basic", "advanced", "fast", "ultra-fast"]
@@ -183,7 +185,32 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     search_parser = subparsers.add_parser("search", help="Search the web with Tavily")
-    search_parser.add_argument("query", help="Search query")
+    search_parser.add_argument(
+        "query",
+        nargs="?",
+        help="Search query (single mode; mutually exclusive with --query)",
+    )
+    search_parser.add_argument(
+        "--query",
+        dest="queries",
+        action="append",
+        default=None,
+        help=(
+            "Run a batch of independent searches in one process; repeat for each query. "
+            "Each value is a complete query string. Mutually exclusive with the positional query."
+        ),
+    )
+    search_parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=DEFAULT_CONCURRENCY,
+        help=f"Max parallel searches in batch mode (default: {DEFAULT_CONCURRENCY})",
+    )
+    search_parser.add_argument(
+        "--serial",
+        action="store_true",
+        help="Force sequential batch execution; overrides --concurrency",
+    )
     search_parser.add_argument(
         "--max-results",
         type=int,
@@ -373,6 +400,20 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
             if args.chunks_per_source is not None and not args.query:
                 parser.error("--chunks-per-source requires --query.")
         return
+    has_positional = args.query is not None
+    has_option = bool(args.queries)
+    if has_positional and has_option:
+        parser.error("Provide either a positional query or --query options, not both.")
+    if not has_positional and not has_option:
+        parser.error("Provide a positional query or at least one --query option.")
+    if has_option:
+        # Batch mode: each query owns its auto-named file, so --stdout/--output are ambiguous.
+        if args.stdout:
+            parser.error("--stdout is not supported in batch mode (--query).")
+        if args.output:
+            parser.error("--output is not supported in batch mode (--query).")
+    if args.concurrency < 1:
+        parser.error("--concurrency must be at least 1.")
     if args.time_range and (args.start_date or args.end_date):
         parser.error("Use either --time-range or --start-date/--end-date, not both.")
     if args.stdout and args.output:
@@ -385,9 +426,9 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         args.include_images = True
 
 
-def _build_search_request(args: argparse.Namespace) -> dict[str, Any]:
+def _build_search_request(args: argparse.Namespace, query: str | None = None) -> dict[str, Any]:
     request: dict[str, Any] = {
-        "query": args.query,
+        "query": args.query if query is None else query,
         "search_depth": args.search_depth,
         "topic": args.topic,
         "max_results": args.max_results,
@@ -416,14 +457,19 @@ def _build_search_request(args: argparse.Namespace) -> dict[str, Any]:
     return request
 
 
-def _normalize_search_response(args: argparse.Namespace, response: dict[str, Any]) -> dict[str, Any]:
+def _normalize_search_response(
+    args: argparse.Namespace,
+    response: dict[str, Any],
+    query: str | None = None,
+) -> dict[str, Any]:
     images = response.get("images") or []
     results = response.get("results") or []
+    effective_query = args.query if query is None else query
 
     return {
         "command": "search",
         "input": {
-            "query": args.query,
+            "query": effective_query,
             "max_results": args.max_results,
             "search_depth": args.search_depth,
             "topic": args.topic,
@@ -439,7 +485,7 @@ def _normalize_search_response(args: argparse.Namespace, response: dict[str, Any
             "timeout": args.timeout,
         },
         "data": {
-            "query": response.get("query", args.query),
+            "query": response.get("query", effective_query),
             "results": results,
             "images": images,
             "response_time": response.get("response_time"),
@@ -537,11 +583,17 @@ def _slugify(value: str, max_length: int = 48) -> str:
     return slug[:max_length].rstrip("_") or "payload"
 
 
-def _default_output_path(args: argparse.Namespace) -> str:
+def _default_output_path_for_search(query: str) -> str:
     timestamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    slug = _slugify(query)
+    return str(get_default_output_dir() / f"search_{timestamp}_{slug}.json")
+
+
+def _default_output_path(args: argparse.Namespace) -> str:
     if args.command == "search":
-        seed = args.query
-    elif args.command == "extract":
+        return _default_output_path_for_search(args.query)
+    timestamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    if args.command == "extract":
         seed = args.urls[0]
     else:
         seed = args.command
@@ -610,6 +662,142 @@ def run_search(client: SearchClient, args: argparse.Namespace) -> dict[str, Any]
     return _normalize_search_response(args, response)
 
 
+def _effective_concurrency(args: argparse.Namespace) -> int:
+    if getattr(args, "serial", False):
+        return 1
+    return args.concurrency
+
+
+def _batch_output_paths(queries: list[str]) -> list[str]:
+    """Reserve one unique auto-named output path per query.
+
+    Paths are computed up front on the main thread so that concurrent workers
+    never race on filename allocation. Colliding names get a numeric suffix.
+    """
+    used: set[str] = set()
+    paths: list[str] = []
+    for query in queries:
+        base = _default_output_path_for_search(query)
+        base_path = Path(base)
+        candidate = base
+        index = 1
+        while candidate in used or Path(candidate).exists():
+            candidate = str(base_path.with_name(f"{base_path.stem}_{index}{base_path.suffix}"))
+            index += 1
+        used.add(candidate)
+        paths.append(candidate)
+    return paths
+
+
+def _write_payload_file(payload: dict[str, Any], output_path: str) -> int:
+    text = json.dumps(payload, ensure_ascii=False, indent=2)
+    target = Path(output_path).expanduser()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text, encoding="utf-8")
+    return len(text.encode("utf-8"))
+
+
+def _run_batch_query(
+    client: SearchClient,
+    args: argparse.Namespace,
+    query: str,
+    output_path: str,
+) -> dict[str, Any]:
+    request = _build_search_request(args, query)
+    response = client.search(**request)
+    payload = _normalize_search_response(args, response, query)
+    _write_payload_file(payload, output_path)
+    return {
+        "query": query,
+        "output_path": output_path,
+        "summary": {
+            "result_count": payload["data"].get("result_count"),
+            "image_count": payload["data"].get("image_count"),
+        },
+        "error": None,
+    }
+
+
+def _batch_payload_schema() -> dict[str, Any]:
+    return {
+        "command": "search",
+        "mode": "batch",
+        "status": "ok|partial|error",
+        "query_count": "number",
+        "success_count": "number",
+        "error_count": "number",
+        "results": [{
+            "query": "string",
+            "output_path": "string|null",
+            "summary": "object|null",
+            "error": "object|null",
+        }],
+    }
+
+
+def run_search_batch(client: SearchClient, args: argparse.Namespace) -> tuple[dict[str, Any], int]:
+    """Run every --query in one process and return (status envelope, exit code).
+
+    A single Tavily SDK client is shared across worker threads. The SDK issues
+    plain HTTP requests, so this is safe; if that ever changes, build a client
+    per call instead. Output files are written per query, preserving the
+    "one query = one file" corpus invariant.
+    """
+    queries = list(args.queries)
+    paths = _batch_output_paths(queries)
+    concurrency = _effective_concurrency(args)
+    entries: list[dict[str, Any] | None] = [None] * len(queries)
+
+    def worker(index: int) -> None:
+        try:
+            entries[index] = _run_batch_query(client, args, queries[index], paths[index])
+        except Exception as exc:  # noqa: BLE001 - per-query isolation is the point
+            entries[index] = {
+                "query": queries[index],
+                "output_path": None,
+                "summary": None,
+                "error": {"type": type(exc).__name__, "message": str(exc)},
+            }
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
+        list(executor.map(worker, range(len(queries))))
+
+    resolved = [entry for entry in entries if entry is not None]
+    error_count = sum(1 for entry in resolved if entry["error"])
+    success_count = len(queries) - error_count
+    if error_count == 0:
+        status = "ok"
+    elif success_count == 0:
+        status = "error"
+    else:
+        status = "partial"
+
+    envelope = {
+        "command": "search",
+        "mode": "batch",
+        "status": status,
+        "query_count": len(queries),
+        "success_count": success_count,
+        "error_count": error_count,
+        "results": resolved,
+        "payload_schema": _batch_payload_schema(),
+    }
+    return envelope, (1 if success_count == 0 else 0)
+
+
+def emit_search_batch(envelope: dict[str, Any]) -> int:
+    print(json.dumps(envelope, ensure_ascii=False, indent=2))
+    if envelope["error_count"]:
+        print(
+            f"Warning: {envelope['error_count']}/{envelope['query_count']} "
+            "queries failed in batch mode",
+            file=sys.stderr,
+        )
+    if envelope["success_count"] == 0:
+        return 1
+    return 0
+
+
 def run_extract(client: SearchClient, args: argparse.Namespace) -> dict[str, Any]:
     request = _build_extract_request(args)
     response = client.extract(**request)
@@ -630,15 +818,19 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "usage":
             payload = run_usage(args, _get_api_key())
+            _emit_payload(payload, _resolve_output_path(args))
+            return 0
+        client = _build_client()
+        if args.command == "search":
+            if args.queries:
+                envelope, _ = run_search_batch(client, args)
+                return emit_search_batch(envelope)
+            payload = run_search(client, args)
+        elif args.command == "extract":
+            payload = run_extract(client, args)
         else:
-            client = _build_client()
-            if args.command == "search":
-                payload = run_search(client, args)
-            elif args.command == "extract":
-                payload = run_extract(client, args)
-            else:
-                parser.error(f"Unsupported command: {args.command}")
-                return 1
+            parser.error(f"Unsupported command: {args.command}")
+            return 1
         _emit_payload(payload, _resolve_output_path(args))
         return 0
     except KeyboardInterrupt:
