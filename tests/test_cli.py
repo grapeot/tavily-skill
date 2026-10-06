@@ -804,6 +804,22 @@ def test_search_rejects_missing_query() -> None:
         tavily_cli._validate_args(parser, args)
 
 
+def test_search_rejects_empty_positional_query() -> None:
+    parser = _build_parser()
+    args = parser.parse_args(["search", "   "])
+
+    with pytest.raises(SystemExit):
+        tavily_cli._validate_args(parser, args)
+
+
+def test_search_batch_rejects_empty_query() -> None:
+    parser = _build_parser()
+    args = parser.parse_args(["search", "--query", "ok", "--query", "  "])
+
+    with pytest.raises(SystemExit):
+        tavily_cli._validate_args(parser, args)
+
+
 def test_search_batch_rejects_output_flag() -> None:
     parser = _build_parser()
     args = parser.parse_args(["search", "--query", "a", "--output", "/tmp/out.json"])
@@ -857,11 +873,22 @@ def test_run_search_batch_writes_one_file_per_query(
     envelope, exit_code = tavily_cli.run_search_batch(client, args)
 
     assert exit_code == 0
-    assert envelope["mode"] == "batch"
-    assert envelope["query_count"] == 2
-    assert envelope["success_count"] == 2
-    assert envelope["error_count"] == 0
+    assert envelope["command"] == "search"
+    assert envelope["output_mode"] == "batch"
+    assert envelope["output_dir"] == str(tavily_cli.get_default_output_dir())
     assert envelope["status"] == "ok"
+    assert envelope["summary"] == {
+        "query_count": 2,
+        "success_count": 2,
+        "failed_count": 0,
+        "credits_used": None,
+    }
+    assert envelope["input"]["queries"] == ["first query", "second query"]
+    assert envelope["input"]["concurrency"] == 4
+    assert envelope["input"]["serial"] is False
+    assert envelope["input"]["search_depth"] == "advanced"
+    assert envelope["input"]["max_results"] == 6
+    assert envelope["input"]["raw_content"] == "markdown"
     assert len(client.search_calls) == 2
     assert sorted(call["query"] for call in client.search_calls) == ["first query", "second query"]
 
@@ -927,9 +954,12 @@ def test_main_batch_success_emits_single_envelope(
     captured = capsys.readouterr()
     envelope = json.loads(captured.out)
     assert exit_code == 0
-    assert envelope["mode"] == "batch"
+    assert envelope["output_mode"] == "batch"
     assert envelope["status"] == "ok"
-    assert envelope["query_count"] == 2
+    assert envelope["summary"]["query_count"] == 2
+    assert envelope["summary"]["success_count"] == 2
+    assert "mode" not in envelope
+    assert "error_count" not in envelope["summary"]
     assert captured.err == ""
 
 
@@ -951,15 +981,16 @@ def test_main_batch_partial_failure_returns_zero(
     envelope = json.loads(captured.out)
     assert exit_code == 0
     assert envelope["status"] == "partial"
-    assert envelope["success_count"] == 1
-    assert envelope["error_count"] == 1
+    assert envelope["summary"]["success_count"] == 1
+    assert envelope["summary"]["failed_count"] == 1
 
     good = next(entry for entry in envelope["results"] if entry["query"] == "good")
     bad = next(entry for entry in envelope["results"] if entry["query"] == "bad")
     assert Path(good["output_path"]).exists()
     assert bad["output_path"] is None
     assert bad["summary"] is None
-    assert bad["error"]["type"] == "RuntimeError"
+    assert bad["error"]["http_status"] is None
+    assert bad["error"]["error"] == "boom: bad"
     assert "Warning" in captured.err
 
 
@@ -981,8 +1012,8 @@ def test_main_batch_all_failures_return_one(
     envelope = json.loads(captured.out)
     assert exit_code == 1
     assert envelope["status"] == "error"
-    assert envelope["success_count"] == 0
-    assert envelope["error_count"] == 2
+    assert envelope["summary"]["success_count"] == 0
+    assert envelope["summary"]["failed_count"] == 2
     assert "Warning" in captured.err
 
 
@@ -1010,3 +1041,21 @@ def test_main_usage_error_exits_two() -> None:
         tavily_cli.main(["search"])
 
     assert excinfo.value.code == 2
+
+
+def test_main_batch_keyboard_interrupt_returns_130(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(tavily_cli, "_build_client", lambda: StubClient())
+
+    def interrupt(client: object, args: object) -> object:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(tavily_cli, "run_search_batch", interrupt)
+
+    exit_code = tavily_cli.main(["search", "--query", "a"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 130
+    assert "Interrupted" in captured.err

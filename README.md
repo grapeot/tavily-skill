@@ -122,11 +122,27 @@ Batch mode prints exactly one JSON status envelope to stdout. It carries one ent
 ```json
 {
   "command": "search",
-  "mode": "batch",
   "status": "ok",
-  "query_count": 3,
-  "success_count": 3,
-  "error_count": 0,
+  "output_mode": "batch",
+  "output_dir": "tmp/tavily",
+  "input": {
+    "queries": ["q1", "q2", "q3"],
+    "concurrency": 4,
+    "serial": false,
+    "max_results": 6,
+    "search_depth": "advanced",
+    "topic": "general",
+    "time_range": null,
+    "start_date": null,
+    "end_date": null,
+    "include_domains": [],
+    "exclude_domains": [],
+    "include_images": false,
+    "raw_content": "markdown",
+    "country": null,
+    "timeout": 60
+  },
+  "summary": {"query_count": 3, "success_count": 3, "failed_count": 0, "credits_used": null},
   "results": [
     {
       "query": "q1",
@@ -139,7 +155,7 @@ Batch mode prints exactly one JSON status envelope to stdout. It carries one ent
 }
 ```
 
-`status` is `ok` when every query succeeds, `partial` when some fail, and `error` when all fail. Partial failure returns exit 0 and adds a stderr warning; if every query fails, the exit code is 1. Single-query behavior, output format, and exit codes are unchanged.
+`status` is `ok` when every query succeeds, `partial` when some fail, and `error` when all fail. A failed query carries `"error": {"http_status": null, "error": "<message>"}`. `concurrency` is the effective value (1 when `--serial`). `credits_used` is always `null` because Tavily's search endpoint does not report credits. Partial failure returns exit 0 and adds a stderr warning; if every query fails, the exit code is 1. Single-query behavior, output format, and exit codes are unchanged. This batch shape matches the sibling `firecrawl-skill` so agents can parse both identically.
 
 The `usage` command reports the account plan and credit usage in the same envelope:
 

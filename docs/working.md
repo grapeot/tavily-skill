@@ -24,6 +24,7 @@
 ## 2026-10-05
 
 - Added multi-query batch mode to `search`: repeatable `--query`, optional positional `query`, `--concurrency N` (default 4) and `--serial`, execution via `ThreadPoolExecutor` over the shared SDK client. One auto-named JSON file per query (index suffix on collision), exactly one batch status envelope on stdout, `--output`/`--stdout` rejected in batch mode. Partial failure exits 0 with per-query errors and a stderr warning; all-failure exits 1; usage errors exit 2.
+- Unified the batch envelope with the sibling `firecrawl-skill`: replaced top-level `mode`/flat counts with `output_mode: "batch"` and nested `summary` (`query_count`/`success_count`/`failed_count`/`credits_used`), added `output_dir` and an `input` block, and changed per-query `error` to `{"http_status", "error"}`. Also reject empty/whitespace-only queries (exit 2) and stop the thread pool from blocking on Ctrl-C so the process returns 130 promptly.
 
 ## Lessons Learned
 

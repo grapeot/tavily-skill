@@ -228,16 +228,32 @@ In default mode, `search`'s `data.results` retains the result items returned by 
 
 In default mode, stdout does not return this full payload. It returns a lightweight object containing the output path, summary information, and payload schema. The full payload only prints to stdout when `--stdout` is passed.
 
-In batch mode, stdout returns exactly one batch status envelope. Every entry follows the per-query schema `{"query", "output_path", "summary", "error"}`, where `summary` is `{"result_count", "image_count"}` and `error` is `null` or `{"type", "message"}`:
+In batch mode, stdout returns exactly one batch status envelope whose top-level shape matches `firecrawl-skill`. Every entry follows the per-query schema `{"query", "output_path", "summary", "error"}`, where `summary` is `{"result_count", "image_count"}` and `error` is `null` or `{"http_status", "error"}`:
 
 ```json
 {
   "command": "search",
-  "mode": "batch",
   "status": "ok",
-  "query_count": 3,
-  "success_count": 3,
-  "error_count": 0,
+  "output_mode": "batch",
+  "output_dir": "tmp/tavily",
+  "input": {
+    "queries": ["q1", "q2", "q3"],
+    "concurrency": 4,
+    "serial": false,
+    "max_results": 6,
+    "search_depth": "advanced",
+    "topic": "general",
+    "time_range": null,
+    "start_date": null,
+    "end_date": null,
+    "include_domains": [],
+    "exclude_domains": [],
+    "include_images": false,
+    "raw_content": "markdown",
+    "country": null,
+    "timeout": 60
+  },
+  "summary": {"query_count": 3, "success_count": 3, "failed_count": 0, "credits_used": null},
   "results": [
     {"query": "q1", "output_path": "...", "summary": {"result_count": 6, "image_count": 0}, "error": null}
   ],
@@ -245,7 +261,7 @@ In batch mode, stdout returns exactly one batch status envelope. Every entry fol
 }
 ```
 
-`status` is `ok` (all succeeded), `partial` (some failed), or `error` (all failed). Partial failure returns exit 0 with a stderr warning; if every query fails the exit code is 1. Usage errors exit 2.
+`status` is `ok` (all succeeded), `partial` (some failed), or `error` (all failed). `concurrency` is the effective value (1 when `--serial`); `credits_used` is always `null` because Tavily search does not report credits; a failed entry has `"error": {"http_status": null, "error": "<message>"}`. Partial failure returns exit 0 with a stderr warning; if every query fails the exit code is 1. Usage errors exit 2.
 
 ## Testing
 

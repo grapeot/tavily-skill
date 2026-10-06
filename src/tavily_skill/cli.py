@@ -406,6 +406,10 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         parser.error("Provide either a positional query or --query options, not both.")
     if not has_positional and not has_option:
         parser.error("Provide a positional query or at least one --query option.")
+    if has_positional and not args.query.strip():
+        parser.error("Search query must not be empty.")
+    if has_option and any(not query.strip() for query in args.queries):
+        parser.error("--query values must not be empty.")
     if has_option:
         # Batch mode: each query owns its auto-named file, so --stdout/--output are ambiguous.
         if args.stdout:
@@ -718,14 +722,42 @@ def _run_batch_query(
     }
 
 
+def _batch_error(exc: Exception) -> dict[str, Any]:
+    http_status = getattr(exc, "status_code", None)
+    if not isinstance(http_status, int):
+        http_status = None
+    return {"http_status": http_status, "error": str(exc)}
+
+
 def _batch_payload_schema() -> dict[str, Any]:
     return {
         "command": "search",
-        "mode": "batch",
         "status": "ok|partial|error",
-        "query_count": "number",
-        "success_count": "number",
-        "error_count": "number",
+        "output_mode": "batch",
+        "output_dir": "string",
+        "input": {
+            "queries": "array",
+            "concurrency": "number",
+            "serial": "boolean",
+            "max_results": "number",
+            "search_depth": "string",
+            "topic": "string",
+            "time_range": "string|null",
+            "start_date": "string|null",
+            "end_date": "string|null",
+            "include_domains": "array",
+            "exclude_domains": "array",
+            "include_images": "boolean",
+            "raw_content": "string",
+            "country": "string|null",
+            "timeout": "number",
+        },
+        "summary": {
+            "query_count": "number",
+            "success_count": "number",
+            "failed_count": "number",
+            "credits_used": "null",
+        },
         "results": [{
             "query": "string",
             "output_path": "string|null",
@@ -738,10 +770,10 @@ def _batch_payload_schema() -> dict[str, Any]:
 def run_search_batch(client: SearchClient, args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     """Run every --query in one process and return (status envelope, exit code).
 
-    A single Tavily SDK client is shared across worker threads. The SDK issues
-    plain HTTP requests, so this is safe; if that ever changes, build a client
-    per call instead. Output files are written per query, preserving the
-    "one query = one file" corpus invariant.
+    A single Tavily SDK client is shared across worker threads. This is safe only
+    while the SDK stays effectively stateless over HTTP; if a future version keeps
+    non-thread-safe state, build one client per call instead. Output files are
+    written per query, preserving the "one query = one file" corpus invariant.
     """
     queries = list(args.queries)
     paths = _batch_output_paths(queries)
@@ -756,16 +788,23 @@ def run_search_batch(client: SearchClient, args: argparse.Namespace) -> tuple[di
                 "query": queries[index],
                 "output_path": None,
                 "summary": None,
-                "error": {"type": type(exc).__name__, "message": str(exc)},
+                "error": _batch_error(exc),
             }
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=concurrency)
+    try:
         list(executor.map(worker, range(len(queries))))
+    except KeyboardInterrupt:
+        # Do not wait for running workers on Ctrl-C; let main() return 130 promptly.
+        executor.shutdown(wait=False, cancel_futures=True)
+        raise
+    else:
+        executor.shutdown(wait=True)
 
     resolved = [entry for entry in entries if entry is not None]
-    error_count = sum(1 for entry in resolved if entry["error"])
-    success_count = len(queries) - error_count
-    if error_count == 0:
+    failed_count = sum(1 for entry in resolved if entry["error"])
+    success_count = len(queries) - failed_count
+    if failed_count == 0:
         status = "ok"
     elif success_count == 0:
         status = "error"
@@ -774,11 +813,32 @@ def run_search_batch(client: SearchClient, args: argparse.Namespace) -> tuple[di
 
     envelope = {
         "command": "search",
-        "mode": "batch",
         "status": status,
-        "query_count": len(queries),
-        "success_count": success_count,
-        "error_count": error_count,
+        "output_mode": "batch",
+        "output_dir": str(get_default_output_dir()),
+        "input": {
+            "queries": queries,
+            "concurrency": concurrency,
+            "serial": bool(getattr(args, "serial", False)),
+            "max_results": args.max_results,
+            "search_depth": args.search_depth,
+            "topic": args.topic,
+            "time_range": args.time_range,
+            "start_date": args.start_date,
+            "end_date": args.end_date,
+            "include_domains": args.include_domains,
+            "exclude_domains": args.exclude_domains,
+            "include_images": args.include_images,
+            "raw_content": args.raw_content,
+            "country": args.country,
+            "timeout": args.timeout,
+        },
+        "summary": {
+            "query_count": len(queries),
+            "success_count": success_count,
+            "failed_count": failed_count,
+            "credits_used": None,
+        },
         "results": resolved,
         "payload_schema": _batch_payload_schema(),
     }
@@ -787,13 +847,14 @@ def run_search_batch(client: SearchClient, args: argparse.Namespace) -> tuple[di
 
 def emit_search_batch(envelope: dict[str, Any]) -> int:
     print(json.dumps(envelope, ensure_ascii=False, indent=2))
-    if envelope["error_count"]:
+    summary = envelope["summary"]
+    if summary["failed_count"]:
         print(
-            f"Warning: {envelope['error_count']}/{envelope['query_count']} "
+            f"Warning: {summary['failed_count']}/{summary['query_count']} "
             "queries failed in batch mode",
             file=sys.stderr,
         )
-    if envelope["success_count"] == 0:
+    if summary["success_count"] == 0:
         return 1
     return 0
 
