@@ -8,7 +8,9 @@ disable-model-invocation: true
 
 # Tavily Skill
 
-Real-time web search and URL content extraction through the Tavily Python SDK. The CLI defaults to writing full payloads to local JSON files and returning a lightweight status object on stdout; use `--stdout` when you need the complete JSON inline.
+Real-time web search and URL content extraction through the Tavily Python SDK. The CLI writes full payloads to local JSON files and returns a lightweight status object on stdout. Full results are never inlined for search or extract; callers read the output file in code and select what they need.
+
+Mandatory files do not automatically protect LLM context windows: select bounded fields in code rather than pasting or printing complete payload files.
 
 This skill and `firecrawl-skill` run in parallel. **Prefer `firecrawl-skill` for new search/extract tasks; use this skill for its unique capabilities (LLM image descriptions, chunked extraction with `--chunks-per-source`) or when Firecrawl is unavailable/out of credits.**
 
@@ -43,6 +45,48 @@ python -m tavily_skill search "latest AI news"
 
 Defaults request `raw_content="markdown"` and writes the complete result to an auto-named file under `tmp/tavily/` (or `TAVILY_CLI_OUTPUT_DIR` when set); stdout returns only a status JSON.
 
+### Reading search results safely in Python (single search)
+
+Check `proc.returncode` before attempting `json.loads(proc.stdout)`. If the command fails (exit 2 for invalid flags like the removed `--stdout` flag, or exit 1 for API/write failures), stdout may be empty; report `proc.stderr` and abort. When successful, parse the status JSON, validate the envelope, open the exact `output_path` returned for this invocation (never guess filenames by globbing or checking newest mtime), and select only bounded fields in code. Run this example from the repo root; the subprocess and file reads inherit the same working directory, so relative returned paths resolve correctly:
+
+```bash
+./.venv/bin/python - <<'PY'
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+cmd = [sys.executable, "-m", "tavily_skill", "search", "latest AI news"]
+proc = subprocess.run(cmd, capture_output=True, text=True)
+
+# Check returncode BEFORE json.loads; failed calls may have empty stdout.
+if proc.returncode != 0:
+    print(f"Error (exit {proc.returncode}): {proc.stderr.strip()}", file=sys.stderr)
+    sys.exit(proc.returncode)
+
+status = json.loads(proc.stdout)
+if (
+    status.get("command") != "search"
+    or status.get("status") != "ok"
+    or status.get("output_mode") != "file"
+    or not status.get("output_path")
+):
+    print("Unexpected search status envelope", file=sys.stderr)
+    sys.exit(1)
+
+# Open EXACT status['output_path'], never glob/guess latest.
+output_path = Path(status["output_path"])
+payload = json.loads(output_path.read_text(encoding="utf-8"))
+results = payload["data"]["results"]
+for item in results[:3]:
+    title = (item.get("title") or "")[:80]
+    url = (item.get("url") or "")[:300]
+    raw_content = item.get("raw_content") or item.get("content") or ""
+    body = raw_content[:500]
+    print(f"Title: {title}\nURL: {url}\nExcerpt: {body}\n---")
+PY
+```
+
 ### Specify result count and time range
 
 ```bash
@@ -67,7 +111,60 @@ python -m tavily_skill search \
   --concurrency 4
 ```
 
-Each `--query` value is one complete query string (multi-word values are not split). The positional `query` form still works and is mutually exclusive with `--query`; passing both or neither is a usage error. Batch mode writes one auto-named file per query and prints exactly one batch status envelope to stdout; `--stdout` and `--output` are single-mode only. Add `--serial` (or `--concurrency 1`) to run sequentially; `--serial` wins over `--concurrency`.
+Each `--query` value is one complete query string (multi-word values are not split). The positional `query` form still works and is mutually exclusive with `--query`; passing both or neither is a usage error. Batch mode writes one auto-named file per query and prints exactly one batch status envelope to stdout; `--output` is rejected in batch mode. Add `--serial` (or `--concurrency 1`) to run sequentially; `--serial` wins over `--concurrency`.
+
+### Reading batch search results safely in Python
+
+Check the return code before `json.loads`. A partial failure exits 0 with per-query errors recorded in `results`; an all-queries failure exits 1, and usage errors exit 2. Only open entries where `error is None` and `output_path` is nonempty from this invocation. Failed entries are skipped or reported without attempting file access. This standalone example caps processed queries, results, and text lengths. Run it from the repo root, keeping the subprocess and file reads in the same working directory:
+
+```bash
+./.venv/bin/python - <<'PY'
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+cmd = [
+    sys.executable, "-m", "tavily_skill", "search",
+    "--query", "latest AI news", "--query", "anthropic news",
+    "--concurrency", "2",
+]
+proc = subprocess.run(cmd, capture_output=True, text=True)
+
+# Partial success exits 0; nonzero exits stop before JSON parsing.
+if proc.returncode != 0:
+    print(f"Batch execution failed (exit {proc.returncode}): {proc.stderr.strip()}", file=sys.stderr)
+    sys.exit(proc.returncode)
+
+envelope = json.loads(proc.stdout)
+if (
+    envelope.get("command") != "search"
+    or envelope.get("output_mode") != "batch"
+    or envelope.get("status") not in ("ok", "partial")
+):
+    print("Unexpected batch envelope", file=sys.stderr)
+    sys.exit(1)
+
+for entry in envelope["results"][:5]:
+    query = (entry.get("query") or "")[:120]
+    error = entry.get("error")
+    output_path_str = entry.get("output_path")
+    if error is not None or not output_path_str:
+        print(f"[FAILED] Query: {query}", file=sys.stderr)
+        continue
+
+    # Use only this entry's exact returned path, never directory discovery.
+    target_file = Path(output_path_str)
+    payload = json.loads(target_file.read_text(encoding="utf-8"))
+    print(f"=== Results for: {query} ===")
+    for item in payload["data"]["results"][:2]:
+        title = (item.get("title") or "")[:80]
+        url = (item.get("url") or "")[:300]
+        raw_content = item.get("raw_content") or item.get("content") or ""
+        body = raw_content[:300]
+        print(f"  * {title} ({url})\n    {body}\n")
+PY
+```
 
 ### Write to a named file
 
@@ -75,11 +172,7 @@ Each `--query` value is one complete query string (multi-word values are not spl
 python -m tavily_skill search "AI coding tools" --output /tmp/tavily_search.json
 ```
 
-### Print full JSON directly to stdout
-
-```bash
-python -m tavily_skill search "AI coding tools" --stdout
-```
+Stdout still returns the status object. `--output` overrides both `TAVILY_CLI_OUTPUT_DIR` and `./tmp/tavily/`; neither a custom directory nor explicit output guarantees a canonical raw corpus. The exact-path examples above work with these custom destinations without assuming a shared directory.
 
 ### URL content extraction
 
@@ -99,7 +192,7 @@ Reports the account plan, credits used this cycle, remaining credits (`plan_limi
 ### Disable images or raw content
 
 ```bash
-python -m tavily_skill search "earnings news" --stdout --no-images --raw-content off
+python -m tavily_skill search "earnings news" --no-images --raw-content off
 ```
 
 ### Explicitly enable images
@@ -119,9 +212,8 @@ python -m tavily_skill search "latest Apple event stage photos" --images --image
 - `include_image_descriptions` disabled by default
 - If using 1Password: set `ONEPASSWORD_TAVILY_REFERENCE` to point at the credential field
 - Default mode writes the complete result to an auto-named file under `tmp/tavily/` (or under `TAVILY_CLI_OUTPUT_DIR` when set); stdout prints a lightweight status object with `payload_schema`, and hints go to stderr
-- With `--output`, the complete result writes to the specified file; stdout still prints the lightweight status object with `payload_schema`
-- With `--stdout`, the complete payload prints directly to stdout without writing to disk
-- With one or more `--query`, batch mode writes one auto-named file per query and prints exactly one batch status envelope to stdout (no raw content inline); `--output` and `--stdout` are rejected
+- With `--output`, the complete result writes to the specified file; stdout still prints the lightweight status object with `payload_schema`. A custom path does not land in the shared snapshot directory unless the caller chooses that directory
+- With one or more `--query`, batch mode writes one auto-named file per query and prints exactly one batch status envelope to stdout (no raw content inline); `--output` is rejected
 
 ## Parameter reference
 
@@ -141,7 +233,6 @@ python -m tavily_skill search "latest Apple event stage photos" --images --image
 | `--end-date` | End date, `YYYY-MM-DD` | — |
 | `--include-domain` | Restrict to a domain; repeat for multiple | — |
 | `--exclude-domain` | Exclude a domain; repeat for multiple | — |
-| `--stdout` | Print full payload directly to stdout | `False` |
 | `--raw-content` | `off` / `markdown` / `text` | `markdown` |
 | `--country` | Boost results by country | — |
 | `--timeout` | Request timeout in seconds | `60` |
@@ -160,7 +251,6 @@ python -m tavily_skill search "latest Apple event stage photos" --images --image
 | `--format` | `markdown` / `text` | `markdown` |
 | `--query` | Keep only chunks relevant to the query | — |
 | `--chunks-per-source` | Number of relevant chunks retained per URL | — |
-| `--stdout` | Print full payload directly to stdout | `False` |
 | `--images` | Enable image extraction | `False` |
 | `--no-images` | Disable image extraction | `False` |
 | `--favicon` | Return favicon URLs | `False` |
@@ -224,9 +314,9 @@ The top-level structure is fixed:
 }
 ```
 
-In default mode, `search`'s `data.results` retains the result items returned by Tavily, which should include `raw_content`. When image descriptions are enabled, `data.images` is an array of objects containing `url` and `description`. For `extract`, `data.results` holds the URL extraction results and additionally carries `failed_results` and `failed_count`.
+The status JSON on stdout points to a normalized `{command, input, data}` file payload that retains result items and raw content bodies, rather than mirroring every raw SDK response key. When image descriptions are enabled, `data.images` is an array of objects containing `url` and `description`. For `extract`, `data.results` holds the URL extraction results and additionally carries `failed_results` and `failed_count`.
 
-In default mode, stdout does not return this full payload. It returns a lightweight object containing the output path, summary information, and payload schema. The full payload only prints to stdout when `--stdout` is passed.
+For single search and extract, stdout never returns this full payload. It returns a lightweight status object containing `command`, `status`, `output_mode`, `output_path`, `payload_bytes`, `summary`, and `payload_schema`. Full results are never inlined on stdout; callers read the output file in code and select what they need.
 
 In batch mode, stdout returns exactly one batch status envelope whose top-level shape matches `firecrawl-skill`. Every entry follows the per-query schema `{"query", "output_path", "summary", "error"}`, where `summary` is `{"result_count", "image_count"}` and `error` is `null` or `{"http_status", "error"}`:
 
@@ -261,6 +351,8 @@ In batch mode, stdout returns exactly one batch status envelope whose top-level 
 }
 ```
 
+The batch illustration shows only the first query entry and omits the contents of `payload_schema` for brevity; actual output includes one entry per query and a populated schema.
+
 `status` is `ok` (all succeeded), `partial` (some failed), or `error` (all failed). `concurrency` is the effective value (1 when `--serial`); `credits_used` is always `null` because Tavily search does not report credits; a failed entry has `"error": {"http_status": null, "error": "<message>"}`. Partial failure returns exit 0 with a stderr warning; if every query fails the exit code is 1. Usage errors exit 2.
 
 ## Testing
@@ -284,14 +376,14 @@ Integration tests hit the real Tavily API. If `TAVILY_API_KEY` is not set, confi
 - `--time-range` and `--start-date`/`--end-date` are mutually exclusive — use one or the other
 - `--chunks-per-source` requires `--query` (the `extract` flag, not the `search` batch flag)
 - The currently stable commands are `search`, `extract`, and `usage`
-- `--output` still produces JSON on stdout, but that stdout is the status schema, not the full search result
-- On `search`, the positional query and the repeatable `--query` are mutually exclusive; `--output` and `--stdout` are rejected in batch mode
+- `--output` still produces JSON on stdout, but that stdout is the status schema, not the full result; custom output paths do not join the shared snapshot directory
+- On `search`, the positional query and the repeatable `--query` are mutually exclusive; `--output` is rejected in batch mode
 - On `search`, a positional query keeps the existing single-file status contract; batch mode returns one envelope and writes one file per query
 
 ## Operational guidance
 
 - Run the CLI from this skill repo's root directory using its project-local interpreter: `./.venv/bin/python -m tavily_skill ...`. Do not run it from a parent workspace root, because the parent environment may not load this repo's `.env`, so `ONEPASSWORD_TAVILY_REFERENCE` / `TAVILY_API_KEY` may be missing even though sub-agents or project-local calls work.
-- If you want to consume results directly in the current turn rather than writing to disk first, pass `--stdout`. Otherwise stdout only returns a lightweight status object, and the full payload lands under `tmp/tavily/` (or `TAVILY_CLI_OUTPUT_DIR` when set).
+- Always read the output file selectively in code; do not expect full search or extract JSON on stdout. Passing `--stdout` to `search` or `extract` is an unrecognized-argument usage error (exit 2) and makes no network request. Inspect `proc.returncode` before attempting `json.loads(proc.stdout)` and open the exact returned `output_path`. The full payload lands under `tmp/tavily/` (or `TAVILY_CLI_OUTPUT_DIR` when set, unless overridden by `--output`).
 - For routine research, default to `--raw-content markdown`. Base judgments on `data.results[*].raw_content`, source URLs, page titles, snippet content, and — when needed — content pulled via `extract`.
 - Only pass `--raw-content off` when payload size is a confirmed bottleneck. Doing so means you must open the original links or continue with `extract` rather than relying solely on snippets.
 
