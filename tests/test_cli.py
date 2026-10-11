@@ -60,7 +60,7 @@ def test_search_parser_defaults() -> None:
     assert args.include_images is False
     assert args.include_image_descriptions is False
     assert args.raw_content == "markdown"
-    assert args.stdout is False
+    assert not hasattr(args, "stdout")
 
 
 def test_search_parser_rejects_answer_option() -> None:
@@ -79,7 +79,7 @@ def test_extract_parser_defaults() -> None:
     assert args.format == "markdown"
     assert args.include_images is False
     assert args.include_favicon is False
-    assert args.stdout is False
+    assert not hasattr(args, "stdout")
 
 
 def test_validate_search_conflicting_dates() -> None:
@@ -184,26 +184,22 @@ def test_extract_images_can_be_enabled_explicitly() -> None:
     assert args.include_images is True
 
 
-def test_validate_search_rejects_stdout_with_output() -> None:
+def test_search_parser_rejects_stdout_flag() -> None:
     parser = _build_parser()
-    args = parser.parse_args(["search", "latest ai", "--stdout", "--output", "/tmp/out.json"])
 
-    with pytest.raises(SystemExit):
-        tavily_cli._validate_args(parser, args)
+    with pytest.raises(SystemExit) as excinfo:
+        parser.parse_args(["search", "latest ai", "--stdout"])
+
+    assert excinfo.value.code == 2
 
 
-def test_validate_extract_rejects_stdout_with_output() -> None:
+def test_extract_parser_rejects_stdout_flag() -> None:
     parser = _build_parser()
-    args = parser.parse_args([
-        "extract",
-        "https://example.com",
-        "--stdout",
-        "--output",
-        "/tmp/out.json",
-    ])
 
-    with pytest.raises(SystemExit):
-        tavily_cli._validate_args(parser, args)
+    with pytest.raises(SystemExit) as excinfo:
+        parser.parse_args(["extract", "https://example.com", "--stdout"])
+
+    assert excinfo.value.code == 2
 
 
 def test_build_extract_request() -> None:
@@ -273,17 +269,17 @@ def test_normalize_extract_response() -> None:
     assert payload["data"]["image_count"] == 2
 
 
-def test_emit_payload_stdout_only(capsys: pytest.CaptureFixture[str]) -> None:
+def test_emit_payload_usage_stdout_inline(capsys: pytest.CaptureFixture[str]) -> None:
     payload = {
-        "command": "search",
-        "input": {"query": "latest ai"},
-        "data": {"result_count": 1, "image_count": 0},
+        "command": "usage",
+        "input": {"timeout": 60},
+        "data": {"remaining_credits": 9},
     }
 
     tavily_cli._emit_payload(payload, None)
 
     captured = capsys.readouterr()
-    assert json.loads(captured.out)["command"] == "search"
+    assert json.loads(captured.out)["command"] == "usage"
     assert captured.err == ""
 
 
@@ -348,11 +344,19 @@ def test_default_output_path_extract_uses_first_url(tmp_path: Path, monkeypatch:
     assert output_path.endswith("https_example_com_path_q_1.json")
 
 
-def test_resolve_output_path_respects_stdout() -> None:
+def test_resolve_output_path_usage_stdout_skips_file() -> None:
     parser = _build_parser()
-    args = parser.parse_args(["search", "latest ai", "--stdout"])
+    args = parser.parse_args(["usage", "--stdout"])
 
     assert tavily_cli._resolve_output_path(args) is None
+
+
+def test_resolve_output_path_search_uses_explicit_output(tmp_path: Path) -> None:
+    parser = _build_parser()
+    output_path = tmp_path / "custom.json"
+    args = parser.parse_args(["search", "latest ai", "--output", str(output_path)])
+
+    assert tavily_cli._resolve_output_path(args) == str(output_path)
 
 
 def test_run_search_uses_client() -> None:
@@ -830,10 +834,11 @@ def test_search_batch_rejects_output_flag() -> None:
 
 def test_search_batch_rejects_stdout_flag() -> None:
     parser = _build_parser()
-    args = parser.parse_args(["search", "--query", "a", "--stdout"])
 
-    with pytest.raises(SystemExit):
-        tavily_cli._validate_args(parser, args)
+    with pytest.raises(SystemExit) as excinfo:
+        parser.parse_args(["search", "--query", "a", "--stdout"])
+
+    assert excinfo.value.code == 2
 
 
 def test_search_batch_rejects_nonpositive_concurrency() -> None:
@@ -1033,6 +1038,7 @@ def test_main_single_mode_unchanged(
     assert status_payload["command"] == "search"
     assert status_payload["output_mode"] == "file"
     assert "mode" not in status_payload
+    assert "demo" not in captured.out
     assert Path(status_payload["output_path"]).exists()
 
 
@@ -1059,3 +1065,125 @@ def test_main_batch_keyboard_interrupt_returns_130(
     captured = capsys.readouterr()
     assert exit_code == 130
     assert "Interrupted" in captured.err
+
+
+def _forbid_network(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
+    calls = {"n": 0}
+
+    def boom(*args: object, **kwargs: object) -> object:
+        calls["n"] += 1
+        raise AssertionError("must not reach client construction or the network")
+
+    monkeypatch.setattr(tavily_cli, "_build_client", boom)
+    monkeypatch.setattr(tavily_cli, "_get_api_key", boom)
+    monkeypatch.setattr(tavily_cli, "_fetch_usage", boom)
+    monkeypatch.setattr(tavily_cli, "load_workspace_env", boom)
+    return calls
+
+
+def test_search_stdout_rejected_before_request(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls = _forbid_network(monkeypatch)
+
+    with pytest.raises(SystemExit) as excinfo:
+        tavily_cli.main(["search", "latest ai", "--stdout"])
+
+    assert excinfo.value.code == 2
+    assert calls["n"] == 0
+    assert "unrecognized arguments" in capsys.readouterr().err
+
+
+def test_extract_stdout_rejected_before_request(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls = _forbid_network(monkeypatch)
+
+    with pytest.raises(SystemExit) as excinfo:
+        tavily_cli.main(["extract", "https://example.com", "--stdout"])
+
+    assert excinfo.value.code == 2
+    assert calls["n"] == 0
+    assert "unrecognized arguments" in capsys.readouterr().err
+
+
+def test_search_usage_error_rejected_before_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _forbid_network(monkeypatch)
+
+    with pytest.raises(SystemExit) as excinfo:
+        tavily_cli.main(["search"])
+
+    assert excinfo.value.code == 2
+    assert calls["n"] == 0
+
+
+def test_main_extract_writes_file_not_inline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv(tavily_cli._OUTPUT_DIR_ENV, str(tmp_path))
+    monkeypatch.setattr(tavily_cli, "_build_client", lambda: StubClient())
+
+    exit_code = tavily_cli.main(["extract", "https://example.com"])
+
+    captured = capsys.readouterr()
+    status_payload = json.loads(captured.out)
+    assert exit_code == 0
+    assert status_payload["output_mode"] == "file"
+    assert "raw_content" not in captured.out
+    output_path = Path(status_payload["output_path"])
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["command"] == "extract"
+    assert payload["data"]["results"][0]["raw_content"] == "content"
+
+
+def test_main_search_output_does_not_use_shared_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    shared_dir = tmp_path / "shared"
+    custom_path = tmp_path / "custom" / "out.json"
+    monkeypatch.setenv(tavily_cli._OUTPUT_DIR_ENV, str(shared_dir))
+    monkeypatch.setattr(tavily_cli, "_build_client", lambda: StubClient())
+
+    exit_code = tavily_cli.main(["search", "latest ai", "--output", str(custom_path)])
+
+    captured = capsys.readouterr()
+    status_payload = json.loads(captured.out)
+    assert exit_code == 0
+    assert status_payload["output_mode"] == "file"
+    assert status_payload["output_path"] == str(custom_path)
+    assert "demo" not in captured.out
+    assert custom_path.exists()
+    assert not shared_dir.exists()
+    payload = json.loads(custom_path.read_text(encoding="utf-8"))
+    assert payload["data"]["results"][0]["content"] == "demo"
+
+
+def test_main_usage_stdout_inlines_payload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv(tavily_cli._OUTPUT_DIR_ENV, str(tmp_path))
+    monkeypatch.setattr(tavily_cli, "_get_api_key", lambda: "tvly-test")
+
+    def fake_fetch(api_key: str, timeout: float) -> dict[str, object]:
+        assert api_key == "tvly-test"
+        return {"account": {"current_plan": "Bootstrap", "plan_usage": 1, "plan_limit": 10}}
+
+    monkeypatch.setattr(tavily_cli, "_fetch_usage", fake_fetch)
+
+    exit_code = tavily_cli.main(["usage", "--stdout"])
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 0
+    assert payload["command"] == "usage"
+    assert payload["data"]["remaining_credits"] == 9
+    assert "output_mode" not in payload
+    assert list(tmp_path.iterdir()) == []

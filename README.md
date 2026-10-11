@@ -6,7 +6,7 @@ A CLI for AI agents to run Tavily web search and URL extraction. Not a human-fac
 
 Three subcommands: `search` (web search with domain filters, time ranges, and image support), `extract` (pull full-page content from URLs), and `usage` (show the account's plan and credit consumption). All responses are normalized into a stable `{command, input, data}` JSON envelope that won't break when the Tavily SDK changes its response shape.
 
-The default behavior writes the full payload to disk and returns a compact status JSON on stdout — so agents don't accidentally stuff megabyte-scale search results into their context windows unless they explicitly ask for them.
+The CLI writes the full payload to disk and returns a compact status JSON on stdout. Full results are never inlined for search or extract; callers read the output file in code and select what they need. Mandatory file output keeps result bodies off stdout, but it does not automatically protect LLM context windows unless callers select bounded fields in code rather than pasting complete files.
 
 ## Setting up for AI agents
 
@@ -29,15 +29,15 @@ export TAVILY_API_KEY=tvly-...
 
 If you use 1Password CLI, you can set `ONEPASSWORD_TAVILY_REFERENCE` to an `op read`-compatible secret reference instead of exporting the key directly. The CLI resolves it at runtime.
 
-Set `TAVILY_CLI_OUTPUT_DIR` to one dedicated, persistent directory (for example a knowledge-base `web_snapshots/raw` folder). Without it, the CLI writes auto-named payloads under `./tmp/tavily/` relative to the current working directory — ephemeral and scattered across session directories. A single stable directory lets every search/extract payload accumulate as a timestamped corpus of primary sources, which pays off over time for research, auditing, and later retrieval.
+Set `TAVILY_CLI_OUTPUT_DIR` to one dedicated, persistent directory (for example a knowledge-base `web_snapshots/raw` folder) to avoid scattering auto-named payloads across ephemeral `./tmp/tavily/` directories relative to the current working directory. Neither setting `TAVILY_CLI_OUTPUT_DIR` nor passing `--output` guarantees a canonical shared raw corpus: `--output` overrides both default and environment-configured directories, writing directly to the target specified by the caller.
 
 Verify it works:
 
 ```bash
-python -m tavily_skill search "hello world" --stdout
+python -m tavily_skill search "hello world"
 ```
 
-The package is now available as `python -m tavily_skill` (or the console script `tavily-skill`) from this directory.
+A successful run writes the full payload to an auto-named file and prints status JSON on stdout. The package is now available as `python -m tavily_skill` (or the console script `tavily-skill`) from this directory.
 
 ### Step 2: Give your agent the skill file
 
@@ -51,7 +51,7 @@ The skill file is a progressive-disclosure instruction set. It tells the agent:
 - What the CLI does and its defaults
 - Full parameter reference tables for both `search` and `extract`
 - Output structure schema
-- Operational guidance (when to use `--stdout`, when to enable images, what not to trust)
+- Operational guidance (reading result files selectively, when to enable images, what not to trust)
 
 ### Step 3: Tell your agent to load the skill
 
@@ -75,11 +75,8 @@ From the agent's perspective, the workflow is:
 # Search with defaults (writes full payload to ./tmp/tavily/, returns status on stdout)
 python -m tavily_skill search "latest AI news"
 
-# Search with full output on stdout (for one-shot consumption)
-python -m tavily_skill search "latest AI news" --stdout
-
 # Extract full content from a URL
-python -m tavily_skill extract https://example.com/article --stdout
+python -m tavily_skill extract https://example.com/article
 
 # Check credit usage (plan, remaining credits, per-endpoint breakdown)
 python -m tavily_skill usage --stdout
@@ -96,14 +93,32 @@ In default mode, stdout returns a status object like:
   "status": "ok",
   "output_mode": "file",
   "output_path": "tmp/tavily/search_20260510_143022_latest_ai_news.json",
-  "summary": {"result_count": 6, "image_count": 0},
-  "payload_schema": { ... }
+  "payload_bytes": 18432,
+  "summary": {"result_count": 6, "failed_count": null, "image_count": 0},
+  "payload_schema": {
+    "command": "string",
+    "input": "object",
+    "data": {
+      "query": "string",
+      "results": "array",
+      "images": "array",
+      "response_time": "number|null",
+      "request_id": "string|null",
+      "usage": "object|null",
+      "result_count": "number",
+      "image_count": "number"
+    }
+  }
 }
 ```
 
-The agent reads the `output_path` from the status and opens the file when it needs the actual results. The `payload_schema` field tells it the data shape before reading.
+The path, byte count, and result counts above are illustrative, not measured.
 
-When the agent passes `--stdout`, it receives the full search payload directly and should consume it in the current turn (don't pipe it into another subprocess without serializing first).
+The agent reads the `output_path` from the status and opens the file when it needs the actual results. The `payload_schema` field tells it the data shape before reading. Stdout for `search` and `extract` returns status only; the output file holds the full payload. Passing `--stdout` to `search` or `extract` is an unrecognized-argument usage error (exit 2) and makes no network request.
+
+Downstream callers must check the subprocess return code before attempting `json.loads(stdout)`. Nonzero exits must be handled via stderr; stdout is not guaranteed to contain status JSON. Open the exact `output_path` returned by this invocation, never guess filenames via globbing or newest mtime, and select only bounded fields (for example, the first 3 titles, URLs, and truncated excerpts).
+
+See the [single-search Python example](skills/skill_tavily.md#reading-search-results-safely-in-python-single-search) and [batch Python example](skills/skill_tavily.md#reading-batch-search-results-safely-in-python) for executable exact-path reading and bounded selection.
 
 ### Batch search
 
@@ -113,7 +128,7 @@ An agent that needs several independent searches used to pay one model round-tri
 python -m tavily_skill search --query "q1" --query "q2" --query "q3"
 ```
 
-The positional `query` form is unchanged and mutually exclusive with `--query`; passing both (or neither) is a usage error (exit 2). `--output` and `--stdout` are single-mode only — in batch mode they are usage errors, because each query owns its own auto-named file.
+The positional `query` form is unchanged and mutually exclusive with `--query`; passing both (or neither) is a usage error (exit 2). `--output` is rejected in batch mode because each query owns its own auto-named file. A custom `--output` path in single mode does not land in the shared snapshot directory unless the caller chooses that directory, so it does not join the shared raw corpus.
 
 Batch execution uses a thread pool over the shared Tavily SDK client. `--concurrency N` caps parallelism (default 4) and `--serial` forces sequential execution (equivalent to `--concurrency 1`); `--serial` wins when both are passed.
 
@@ -151,11 +166,13 @@ Batch mode prints exactly one JSON status envelope to stdout. It carries one ent
       "error": null
     }
   ],
-  "payload_schema": { ... }
+  "payload_schema": {}
 }
 ```
 
-`status` is `ok` when every query succeeds, `partial` when some fail, and `error` when all fail. A failed query carries `"error": {"http_status": null, "error": "<message>"}`. `concurrency` is the effective value (1 when `--serial`). `credits_used` is always `null` because Tavily's search endpoint does not report credits. Partial failure returns exit 0 and adds a stderr warning; if every query fails, the exit code is 1. Single-query behavior, output format, and exit codes are unchanged. This batch shape matches the sibling `firecrawl-skill` so agents can parse both identically.
+The batch illustration shows only the first query entry and omits the contents of `payload_schema` for brevity; actual output includes one entry per query and a populated schema.
+
+`status` is `ok` when every query succeeds, `partial` when some fail, and `error` when all fail. A failed query carries `"error": {"http_status": null, "error": "<message>"}`. `concurrency` is the effective value (1 when `--serial`). `credits_used` is always `null` because Tavily's search endpoint does not report credits. Partial failure returns exit 0 and adds a stderr warning; if every query fails, the exit code is 1. Positional single-query file-mode behavior, output format, and exit codes are unchanged; passing the former `--stdout` flag to `search` or `extract` is intentionally breaking and exits 2. This batch shape matches the sibling `firecrawl-skill` so agents can parse both identically.
 
 The `usage` command reports the account plan and credit usage in the same envelope:
 

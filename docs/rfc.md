@@ -12,15 +12,22 @@ Each section records a design decision embodied in the codebase, with the contex
 
 **Consequences.** Downstream parsers see a stable surface regardless of SDK version. The cost is that new SDK fields don't automatically appear in the envelope; they must be explicitly added to the normalization functions. This is deliberate — it makes SDK upgrades an explicit, reviewable change rather than a silent surface expansion.
 
-## 2. File-first output, stdout opt-in
+## 2. File-first output for search and extract
 
-**Decision.** Default behavior writes the full JSON payload to `./tmp/tavily/` and prints a compact status object to stdout. `--stdout` is required to print the full payload inline.
+**Decision.** File output is mandatory for `search` and `extract`. Every successful run writes the full JSON payload to disk and prints a compact status object to stdout; `--stdout` is no longer supported on content commands. `usage --stdout` remains the exception and may inline its small usage payload directly.
 
 **Context.** In agent orchestration loops, subprocess stdout may be captured and forwarded into subsequent LLM calls. A search for "latest AI developments" can return hundreds of kilobytes of markdown content. If that payload lands in the agent's context window on every iteration — especially in a loop — it wastes tokens and dilutes signal.
 
-**What was rejected.** Stdout-first output (print full results inline by default), with an optional `--output` flag for file persistence. This is the more human-friendly default, but humans are the secondary audience.
+**What was rejected.** Inlining search and extract response bodies on stdout.
 
-**Consequences.** Agents parsing subprocess output always receive a predictable, small status JSON. They extract the file path from `status.output_path` and read the full payload only when they need the content. The tradeoff is that a human running `python -m tavily_skill search "foo"` sees status metadata rather than results, until they learn to add `--stdout`. The status object includes `payload_schema` so callers know the data shape before opening the file.
+**Consequences.** Successful single content calls return a small status JSON (`{command, status, output_mode, output_path, payload_bytes, summary, payload_schema}`) rather than the full normalized file payload (`{command, input, data}`). The status object retains `payload_schema` so callers know the data shape before opening the file, and points to a file retaining result bodies without mirroring every internal SDK key.
+
+Callers must follow an exit-before-parse and exact-path selection contract:
+1. **Exit before parse**: Verify `proc.returncode == 0` before calling `json.loads(proc.stdout)`. On nonzero exits (exit 2 for invalid flags like removed `--stdout`, exit 1 for API/write failures), report stderr and abort; stdout is not guaranteed to contain status JSON.
+2. **Exact path resolution**: Open the exact `output_path` returned in that invocation's status envelope, rather than guessing paths via globbing or mtime ordering. For batch partial success (exit 0), open only entries with `error is None` and a nonempty `output_path`.
+3. **In-code bounded selection**: Mandatory file output keeps result bodies off stdout, but does not automatically protect LLM context windows if callers dump entire files into prompts. Select bounded fields (for example, top N results and truncated excerpts) in code.
+
+Explicit `--output` overrides both default `./tmp/tavily/` and `TAVILY_CLI_OUTPUT_DIR`. Neither setting a custom directory nor specifying explicit output guarantees a canonical shared raw corpus. See the [single-search example](../skills/skill_tavily.md#reading-search-results-safely-in-python-single-search) and [batch example](../skills/skill_tavily.md#reading-batch-search-results-safely-in-python) for executable implementations.
 
 ## 3. 1Password bridge without baked vault identifiers
 
@@ -101,7 +108,7 @@ Each section records a design decision embodied in the codebase, with the contex
 
 ## 11. Batch search over a repeatable `--query`, one file per query
 
-**Decision.** `search` accepts a repeatable `--query` flag. One or more `--query` values switch it into batch mode: the process runs every query internally and prints a single batch status envelope. The positional `query` argument becomes optional (`nargs="?"`) but keeps the single-query contract unchanged. Positional query and `--query` are mutually exclusive, as are "neither present" and passing `--output` or `--stdout` in batch mode.
+**Decision.** `search` accepts a repeatable `--query` flag. One or more `--query` values switch it into batch mode: the process runs every query internally and prints a single batch status envelope. The positional `query` argument becomes optional (`nargs="?"`) but keeps positional single-query file-mode behavior unchanged. Positional query and `--query` are mutually exclusive, as is passing neither. `--output` is rejected in batch mode. `--stdout` is not a search flag.
 
 **Context.** An agent that needs ten independent searches previously paid ten model round-trips to invoke the CLI ten times, even though the searches themselves are independent HTTP calls. The round-trips, not the API latency, dominated the cost. Collapsing them into one process removes the round-trips while preserving the `{command, input, data}` file payload for each query.
 
@@ -110,4 +117,4 @@ Each section records a design decision embodied in the codebase, with the contex
 - A comma- or newline-delimited single `--query` string. Splitting on delimiter characters silently mangles legitimate multi-word queries and forces escaping rules on callers.
 - Inlining all batch results into one stdout object. That reintroduces exactly the context-window blowup the file-first design exists to prevent, and breaks the "one query = one file" corpus invariant.
 
-**Consequences.** Parallelism uses `concurrent.futures.ThreadPoolExecutor` from the standard library, defaulting to `--concurrency 4` with `--serial` forcing sequential execution. A single client instance is shared across worker threads, which is safe only while the Tavily SDK stays effectively stateless over HTTP; if a future SDK version keeps non-thread-safe state, the fallback is to build one client per call. Output paths are reserved on the main thread before dispatch, so concurrent workers never race on filename allocation and colliding auto-names get a numeric suffix. Per-query failures are isolated: a partial failure returns exit 0 with the error recorded in the envelope entry and a stderr warning, and only an all-queries failure returns exit 1, consistent with the existing single-query exit-code scheme. Usage errors still exit 2 through argparse. The batch envelope reuses the single-mode `output_mode` key (`"batch"` instead of `"file"`/`"stdout"`), nests counts under `summary` (`query_count`/`success_count`/`failed_count`/`credits_used`), and mirrors the sibling `firecrawl-skill` top-level shape so cross-repo consumers can share one parser.
+**Consequences.** Parallelism uses `concurrent.futures.ThreadPoolExecutor` from the standard library, defaulting to `--concurrency 4` with `--serial` forcing sequential execution. A single client instance is shared across worker threads, which is safe only while the Tavily SDK stays effectively stateless over HTTP; if a future SDK version keeps non-thread-safe state, the fallback is to build one client per call. Output paths are reserved on the main thread before dispatch, so concurrent workers never race on filename allocation and colliding auto-names get a numeric suffix. Per-query failures are isolated: a partial failure returns exit 0 with the error recorded in the envelope entry and a stderr warning, and only an all-queries failure returns exit 1, consistent with the existing single-query exit-code scheme. Usage errors still exit 2 through argparse. The batch envelope reuses the single-mode `output_mode` key (`"batch"` instead of `"file"`), nests counts under `summary` (`query_count`/`success_count`/`failed_count`/`credits_used`), and mirrors the sibling `firecrawl-skill` top-level shape so cross-repo consumers can share one parser.

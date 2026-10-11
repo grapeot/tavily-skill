@@ -49,21 +49,15 @@ Tavily Skill solves each of these at the architectural level — not through con
      │  input, data} envelope     │
      └─────────────┬──────────────┘
                    │
-          ┌────────▼────────┐
-          │  Output dispatch  │
-          │  ┌──────────────┐ │
-          │  │ File mode    │ │  default
-          │  │ (default)    │ │
-          │  │ full → disk  │ │
-          │  │ status →     │ │
-          │  │ stdout       │ │
-          │  └──────────────┘ │
-          │  ┌──────────────┐ │
-          │  │ --stdout     │ │  opt-in
-          │  │ full →       │ │
-          │  │ stdout       │ │
-          │  └──────────────┘ │
-          └──────────────────┘
+           ┌────────▼────────┐
+           │  Output dispatch  │
+           │  ┌──────────────┐ │
+           │  │ File mode    │ │
+           │  │ full → disk  │ │
+           │  │ status →     │ │
+           │  │ stdout       │ │
+           │  └──────────────┘ │
+           └──────────────────┘
 ```
 
 ### The envelope
@@ -89,15 +83,22 @@ The `input` field captures the exact arguments the caller passed. This is not de
 
 ### Output semantics
 
-For a single query the CLI has two output modes, and the default is the one that protects LLM context windows. Batch mode adds a third, file-only mode described below.
+File mode is the only success path for `search` and `extract`. Full results are always written to disk and are never inlined on stdout. `usage --stdout` remains the exception and may inline its small usage payload.
 
-**File mode (default).** The full JSON payload writes to `./tmp/tavily/<command>_<timestamp>_<slug>.json`. The CLI prints a compact status object to stdout — `{command, status, output_path, summary, payload_schema}` — and a one-line confirmation to stderr. An agent calling this from a subprocess reads the status from stdout, extracts the file path, and only reads the full payload when it actually needs the results. The status object includes `payload_schema`, so the agent knows the shape of the data before opening the file.
+**File mode.** The full normalized JSON payload `{command, input, data}` (which retains result items and raw content bodies rather than every raw SDK key) writes to an auto-named file under `TAVILY_CLI_OUTPUT_DIR` if set, otherwise `./tmp/tavily/<command>_<timestamp>_<slug>.json`. An explicit `--output` path overrides both default and environment directories, writing directly to the specified path without guaranteeing shared corpus coverage.
 
-**Stdout mode (`--stdout`).** The full payload prints to stdout. No file is written. This mode exists for one-shot tooling — `jq` pipelines, ephemeral queries — where the caller explicitly opts into receiving the full body inline.
+The CLI prints a compact status object to stdout — `{command, status, output_mode, output_path, payload_bytes, summary, payload_schema}` — and a one-line confirmation to stderr. `summary` provides `result_count`, `failed_count` (`null` for search), and `image_count`.
 
-**Batch mode (`--query` repeated).** Each `--query` value is one complete query. The process runs them with a thread pool (default concurrency 4; `--serial` forces sequential) and writes one full payload file per query, preserving the "one query = one file" corpus invariant. Stdout receives exactly one lightweight batch status envelope, reusing `output_mode: "batch"` and nesting counts under `summary` (`query_count`, `success_count`, `failed_count`, `credits_used`), with one `{query, output_path, summary, error}` entry per query — never raw content. `input` echoes the effective parameters (including the effective `concurrency`), and `output_dir` reports where files landed. The top-level shape matches the sibling `firecrawl-skill` so agents can parse both with one code path. `--output` and `--stdout` are rejected here, since per-query file naming is automatic; empty or whitespace-only queries are usage errors. A partial failure returns exit 0 with per-query errors in the envelope plus a stderr warning; if every query fails the process returns exit 1. The positional single-query form is unchanged and mutually exclusive with `--query`.
+Callers must follow an exit-before-parse and exact-path contract:
+1. Verify `proc.returncode == 0` before calling `json.loads(proc.stdout)`. Nonzero exits (exit 2 for invalid flags like removed `--stdout`, exit 1 for API/write failures) must be handled via stderr, not blindly parsed as status JSON.
+2. Open the exact `output_path` returned in that invocation's status envelope, avoiding globbing or newest-mtime heuristics. In batch mode, only open entries with `error is None` and a nonempty `output_path`.
+3. Select only necessary bounded fields in code (for example, top N results and truncated text excerpts). Mandatory file output keeps result bodies off stdout, but does not automatically keep results out of LLM context if callers dump entire files into prompts.
 
-The key design choice: file mode is the default because the default caller is an agent loop, not a human. If a human wants inline output, they pass `--stdout`. The tradeoff is ergonomics for readability, and the CLI leans toward the former because readability is the agent's problem, not the tool's.
+See the [single-search Python example](../skills/skill_tavily.md#reading-search-results-safely-in-python-single-search) and [batch Python example](../skills/skill_tavily.md#reading-batch-search-results-safely-in-python) for executable implementations.
+
+**Batch mode (`--query` repeated).** Each `--query` value is one complete query. The process runs them with a thread pool (default concurrency 4; `--serial` forces sequential) and writes one full payload file per query, preserving the "one query = one file" corpus invariant. Stdout receives exactly one lightweight batch status envelope, reusing `output_mode: "batch"` and nesting counts under `summary` (`query_count`, `success_count`, `failed_count`, `credits_used`), with one `{query, output_path, summary, error}` entry per query — never raw content. `input` echoes the effective parameters (including the effective `concurrency`), and `output_dir` reports where files landed. The top-level shape matches the sibling `firecrawl-skill` so agents can parse both with one code path. `--output` is rejected in batch mode, since per-query file naming is automatic; empty or whitespace-only queries are usage errors. A partial failure returns exit 0 with per-query errors in the envelope plus a stderr warning; if every query fails the process returns exit 1. The positional single-query form is unchanged and mutually exclusive with `--query`.
+
+The key design choice makes file mode mandatory because the primary caller is an agent loop: callers read result files selectively in code. Explicit `--output` paths override environment and default directories; neither custom directory configuration nor explicit output guarantees canonical shared raw coverage.
 
 ### Credential resolution
 
@@ -123,8 +124,8 @@ No hard-coded absolute paths exist in the codebase. A clone on any machine, in a
 
 All argument validation happens before any API call. The parser enforces:
 
-- Mutual exclusion: `--time-range` vs `--start-date`/`--end-date`, `--stdout` vs `--output`
-- Mode selection on `search`: positional `query` vs `--query`, both present or neither present is an error; `--output`/`--stdout` are rejected in batch mode
+- Mutual exclusion: `--time-range` vs `--start-date`/`--end-date`; `usage` still rejects combining `--stdout` and `--output`. Usage errors, including unrecognized `--stdout` on `search` and `extract`, happen before any API call
+- Mode selection on `search`: positional `query` vs `--query`, both present or neither present is an error; batch mode rejects `--output`
 - Range: `max_results` between 1 and 20, `timeout` > 0, `concurrency` >= 1
 - Dependency: `--chunks-per-source` requires `--query` on `extract`
 - Implicit enable: `--image-descriptions` implicitly enables `--images` (because descriptions without images don't make API sense)

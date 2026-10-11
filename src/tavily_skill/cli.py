@@ -251,11 +251,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Exclude a domain; repeat for multiple domains",
     )
     search_parser.add_argument(
-        "--stdout",
-        action="store_true",
-        help="Print the full JSON payload to stdout instead of writing it to the default output file",
-    )
-    search_parser.add_argument(
         "--raw-content",
         choices=RAW_CONTENT_CHOICES,
         default=DEFAULT_RAW_CONTENT,
@@ -273,7 +268,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     search_parser.add_argument(
         "--output",
-        help="Also write the JSON payload to a file path",
+        help="Write the full payload to this path instead of the default output file",
     )
     search_parser.set_defaults(include_images=False, include_image_descriptions=False)
     search_parser.add_argument(
@@ -331,11 +326,6 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Request timeout in seconds (default: {DEFAULT_TIMEOUT})",
     )
     extract_parser.add_argument(
-        "--stdout",
-        action="store_true",
-        help="Print the full JSON payload to stdout instead of writing it to the default output file",
-    )
-    extract_parser.add_argument(
         "--output",
         help="Write the full extract payload to a file and return status JSON on stdout",
     )
@@ -391,8 +381,6 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         if args.command == "extract":
             if args.timeout <= 0:
                 parser.error("--timeout must be greater than 0.")
-            if args.stdout and args.output:
-                parser.error("Use either --stdout or --output, not both.")
             if not 1 <= len(args.urls) <= 20:
                 parser.error("extract accepts between 1 and 20 URLs.")
             if args.chunks_per_source is not None and args.chunks_per_source <= 0:
@@ -410,18 +398,12 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         parser.error("Search query must not be empty.")
     if has_option and any(not query.strip() for query in args.queries):
         parser.error("--query values must not be empty.")
-    if has_option:
-        # Batch mode: each query owns its auto-named file, so --stdout/--output are ambiguous.
-        if args.stdout:
-            parser.error("--stdout is not supported in batch mode (--query).")
-        if args.output:
-            parser.error("--output is not supported in batch mode (--query).")
+    if has_option and args.output:
+        parser.error("--output is not supported in batch mode (--query).")
     if args.concurrency < 1:
         parser.error("--concurrency must be at least 1.")
     if args.time_range and (args.start_date or args.end_date):
         parser.error("Use either --time-range or --start-date/--end-date, not both.")
-    if args.stdout and args.output:
-        parser.error("Use either --stdout or --output, not both.")
     if not 1 <= args.max_results <= 20:
         parser.error("--max-results must be between 1 and 20.")
     if args.timeout <= 0:
@@ -606,7 +588,7 @@ def _default_output_path(args: argparse.Namespace) -> str:
 
 
 def _resolve_output_path(args: argparse.Namespace) -> str | None:
-    if getattr(args, "stdout", False):
+    if args.command == "usage" and getattr(args, "stdout", False):
         return None
     if getattr(args, "output", None):
         return args.output
